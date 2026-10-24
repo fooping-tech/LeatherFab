@@ -1,1 +1,100 @@
-<!doctype html><html lang="ja"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/><meta name="theme-color" content="#f4f5f7"/><link rel="icon" type="image/svg+xml" href="/favicon.svg"/><title>LeatherFab — 革の型紙を、すぐに。</title></head><body><div id="app"></div><script type="module" src="/src/main.js"></script></body></html>
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#faf6f0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>LeatherFab — 革の型紙を、すぐに。ブラウザで動く革製品設計CAD</title>
+    <meta name="description" content="図形を描いて「縫い穴を作る」だけ。弧長・弦長を区別した縫い穴配置、パーツ間の穴合わせ、レーザー加工用の実寸SVG（CUT/PUNCH/SCORE/ENGRAVE）。PC・iPad・スマートフォンのブラウザで動く革製品設計CAD。" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="LeatherFab" />
+    <meta property="og:title" content="LeatherFab — 革の型紙を、すぐに。" />
+    <meta property="og:description" content="ブラウザで動く革製品設計CAD。縫い穴の自動配置、パーツ間の穴合わせ、レーザー加工用の実寸SVG。" />
+    <meta property="og:url" content="https://fooping-tech.github.io/LeatherFab/" />
+    <meta property="og:image" content="https://fooping-tech.github.io/LeatherFab/landing/editor.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="stylesheet" href="/src/landing.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="top">
+        <a class="brand" href="./"><span class="mark">l<span>f</span></span>LeatherFab</a>
+        <nav class="actions"><a class="btn ghost" href="https://github.com/fooping-tech/LeatherFab">GitHub</a><a class="btn" href="./app/">エディタを開く</a></nav>
+      </header>
+
+      <section class="hero">
+        <div>
+          <div class="eyebrow">Leather pattern CAD · in your browser</div>
+          <h1>革の型紙を、<br />すぐに。</h1>
+          <p class="lead">図形を描いて「縫い穴を作る」を押すだけで革パーツに。外形を変えても縫い穴が追従し、レーザー加工用の実寸 SVG をそのまま書き出せます。インストール不要、アカウント不要、データはブラウザの中だけ。</p>
+          <div class="actions"><a class="btn" href="./app/">無料で使ってみる →</a><span class="note">PC / iPad / スマートフォンのブラウザ対応</span></div>
+        </div>
+        <figure class="shot"><img src="/landing/editor.png" width="1440" height="900" alt="LeatherFab のエディタ。AirTag ケースの表と裏に菱目の縫い穴が並び、右側で革厚・材料・ピッチを編集している" fetchpriority="high" /></figure>
+      </section>
+
+      <section class="features">
+        <div class="card"><div class="ico">✦</div><h3>描いてすぐ作れる</h3><p>長方形・楕円・多角形・フリーハンド・ベジェパスで外形を描き、ワンクリックで縫い線と縫い穴。辺をクリックして部分的な縫い線も引けます。</p></div>
+        <div class="card"><div class="ico">⟲</div><h3>編集しても壊れない</h3><p>縫い穴は座標ではなくパラメータとして保持。移動・拡縮・回転・ノード編集・ブール演算に追従し、参照が無効になれば警告します。</p></div>
+        <div class="card"><div class="ico">⊕</div><h3>弧長と弦長を区別</h3><p>目打ちの刃がまたぐ直線距離（弦長）で配置できるので、曲線でも実際の工具と一致。穴数・実ピッチ・SPI を常に表示します。</p></div>
+        <div class="card"><div class="ico">⟗</div><h3>パーツ間の穴合わせ</h3><p>2 つのパーツの縫い線を「縫合」すると穴数を一致させ、位置ずれと長さ差を表示。表裏・本体とポケットがきれいに縫い合わさります。</p></div>
+        <div class="card"><div class="ico">◎</div><h3>金具・折り線・革厚</h3><p>バネホック、カシメ、ハトメ、マグネット、Dカン、ベルト穴のプリセット。折り線は SCORE、革厚と材料はパーツごとに管理します。</p></div>
+        <div class="card"><div class="ico">↗</div><h3>製作まで最短距離</h3><p>CUT / PUNCH / SCORE / ENGRAVE をグループ分けした mm 実寸 SVG。カーフ補正と加工前チェック（自己交差・重複・穴の縁距離・材料適性）付き。</p></div>
+      </section>
+
+      <section class="flow">
+        <h2>使い方は 4 ステップ</h2>
+        <ol class="steps">
+          <li><b>図形を描く</b>長方形や楕円を置いて、フィレットやパス編集で形を整えます（mm 実寸）。</li>
+          <li><b>縫い穴を作る</b>図形を選んでボタンを押すと革パーツになり、外周 3 mm 内側に穴が並びます。</li>
+          <li><b>調整する</b>ピッチ（3.0 / 3.38 / 3.85 / 4.0 mm…）、穴の形（丸・菱目・フレンチ・スリット・平目）、角の処理をリアルタイムに。</li>
+          <li><b>書き出す</b>加工プレビューで確認して SVG をダウンロード。レーザーカッターや目打ちガイドの印刷に。</li>
+        </ol>
+      </section>
+
+      <section class="detail">
+        <figure class="shot"><img src="/landing/preview.png" width="1440" height="900" alt="加工プレビュー。赤いカット線と青い縫い穴、右側に加工チェックの一覧" loading="lazy" /></figure>
+        <div>
+          <h2>加工データを、曖昧にしない</h2>
+          <ul>
+            <li>加工属性は線色ではなくデータとして明示（<code>data-operation</code> 付きグループ）</li>
+            <li>切断順に並ぶ ENGRAVE → SCORE → PUNCH → CUT</li>
+            <li>カーフ補正: 外形は外へ、穴は内へ、半分ずつ</li>
+            <li>書き出し前の検証: 未閉合・自己交差・重複カット・微小パス・はみ出し・穴と縁の距離・穴どうしの干渉・縫合の不一致</li>
+            <li>材料のレーザー適性を表示。不明な革を「加工可」とは言いません</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="detail">
+        <div>
+          <h2>テンプレートから始める</h2>
+          <ul>
+            <li><b>AirTag ケース</b> — 表（Ø24 の窓）と裏（キーリング穴）。上辺以外を 3.85 mm ピッチの菱目で縫合済み</li>
+            <li><b>カードケース</b> — 本体とポケットの 3 辺を縫合、穴数とピッチが一致</li>
+            <li>どちらも通常の革パーツなので、サイズ・角の丸み・ピッチを自由に変えられます</li>
+          </ul>
+          <p class="note">iPad・スマートフォンでは下部バーからオブジェクト・ツール・編集のシートを開き、ピンチでズーム、2 本指でパンします。</p>
+        </div>
+        <figure class="shot" style="max-width: 320px; justify-self: center"><img src="/landing/mobile.png" width="390" height="844" alt="スマートフォン幅での表示。型紙テンプレートのシートが開いている" loading="lazy" /></figure>
+      </section>
+
+      <section class="spec">
+        <h2>仕様</h2>
+        <table>
+          <tr><td>対応ブラウザ</td><td>最新の Chrome / Edge / Safari / Firefox（PC、iPad、スマートフォン）。インストール・アカウント不要</td></tr>
+          <tr><td>入力</td><td>図形ツール、SVG / DXF の読み込み、PNG / JPEG / GIF の輪郭トレース、プロジェクト JSON</td></tr>
+          <tr><td>縫い穴</td><td>丸・菱目・フレンチ・斜めスリット・平目。弧長 / 弦長ピッチ、自動フィット / 固定 / 穴数、角は apex / straddle / 自動、開始位置、余白、逆目打ち、ミラー</td></tr>
+          <tr><td>出力</td><td>SVG（mm 実寸、CUT / PUNCH / SCORE / ENGRAVE グループ、カーフ補正）、プロジェクト JSON。DXF・1:1 PDF は今後対応</td></tr>
+          <tr><td>データ</td><td>ブラウザ内で処理・自動保存。外部送信なし</td></tr>
+          <tr><td>注意</td><td>穴径・ピッチ・カーフは材料と加工機でテスト加工して決めてください。チェックは加工結果を保証しません</td></tr>
+        </table>
+      </section>
+
+      <footer>
+        <span>LeatherFab · based on <a href="https://github.com/fooping-tech/TypeFab">TypeFab</a></span>
+        <span><a href="https://github.com/fooping-tech/LeatherFab">ソースコード・ドキュメント</a> · <a href="./app/">エディタ</a></span>
+      </footer>
+    </div>
+  </body>
+</html>
