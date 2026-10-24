@@ -39,3 +39,9 @@
 - iPad / スマートフォン実機でのタッチ操作（レイアウトは TypeFab 由来、ヘッドレス Chromium で 390 px 幅の表示のみ確認）。
 - 金具プリセットの寸法は一般的な値の目安で、製品ごとの実測ではない。
 - 革厚・折り構造による寸法補正（内外周差）は未実装。
+
+## 公開（2026-10-24）
+
+- リポジトリ: https://github.com/fooping-tech/LeatherFab
+- GitHub Pages（Actions ワークフロー `pages.yml`、`build_type: workflow`）: https://fooping-tech.github.io/LeatherFab/ （紹介ページ）、https://fooping-tech.github.io/LeatherFab/app/ （エディタ）
+- 初回デプロイ直後は Pages がレガシーのブランチ配信になっており、未ビルドの HTML が配信された。`build_type` を `workflow` に変更して再実行し、ビルド済みアセット（`/LeatherFab/assets/…`）が配信されることを確認した。
