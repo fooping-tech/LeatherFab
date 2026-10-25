@@ -15,7 +15,7 @@ import {
   MATERIALS, LASER_LABELS, LIMITS, OPERATIONS, OPERATION_LABELS, DEFAULT_OFFSET,
 } from "./leather/model.js";
 import { HOLE_SHAPES, SPACINGS, FITS, CORNER_MODES, PITCH_PRESETS, PATTERN_LIMITS, DEFAULT_PATTERN, spiOf } from "./leather/stitch.js";
-import { derivePart, deriveJoint, checkParts, outlinePath } from "./leather/derive.js";
+import { derivePart, deriveJoint, checkParts, outlinePath, relativePlacement, resolveProjectedLines as deriveProjectForProjected } from "./leather/derive.js";
 import { operationGeometry, applyKerf, checkManufacturing, exportLeatherSVG, manufacturingSummary, OPERATION_COLORS, OPERATION_ORDER } from "./leather/manufacturing.js";
 import { HARDWARE_PRESETS, HARDWARE_TYPES, presetById } from "./leather/hardware.js";
 import { TEMPLATES } from "./leather/templates.js";
@@ -50,6 +50,7 @@ export function createLeatherUI(ctx) {
       return value;
     });
     for (const k of [...cache.keys()]) if (!seen.has(k)) cache.delete(k);
+    resolveProjected(parts);
     const joints = l.joints.map((j) => deriveJoint(j, parts));
     for (const dj of joints) {
       if (dj.error || !dj.adjusted) continue;
@@ -58,6 +59,14 @@ export function createLeatherUI(ctx) {
       dj.slave.joined = dj.joint.id;
     }
     return { parts, joints, issues: [...parts.flatMap((d) => d.issues), ...joints.flatMap((j) => j.issues)] };
+  }
+  // Projected lines need the other parts, so they are resolved after the
+  // per-part cache (deriveProject does the same for the non-cached path).
+  function resolveProjected(parts) {
+    const p = project();
+    const pseudo = { ...p, leather: { ...leather(), parts: parts.map((d) => d.part) } };
+    const full = deriveProjectForProjected(pseudo, parts);
+    void full;
   }
   const partOf = (itemId) => partOfItem(leather(), itemId);
   const partById = (id) => leather().parts.find((p) => p.id === id) ?? null;
@@ -92,18 +101,61 @@ export function createLeatherUI(ctx) {
     mutate(() => {
       const items = ctx.selectedItems().filter(canBePart);
       if (!items.length) throw Error("閉じた図形を選択してください。");
-      for (const item of items) makePartFrom(item, withStitch);
-      return items.length;
-    }, (n) => (withStitch ? `${n} 個の図形を革パーツにして、外周に縫い穴を作りました。右側でピッチや穴の形を調整できます。` : `${n} 個の図形を革パーツにしました。`));
+      const targets = [];
+      for (const item of items) {
+        const part = makePartFrom(item, withStitch);
+        if (withStitch) targets.push(...projectLineDown(part, part.stitchLines.at(-1)));
+      }
+      return { n: items.length, targets };
+    }, ({ n, targets }) => (withStitch ? `${n} 個の図形を革パーツにして、外周に縫い穴を作りました。${projectNotice(targets)}` : `${n} 個の図形を革パーツにしました。`));
   function addFullStitch() {
     mutate(() => {
       const items = ctx.selectedItems().filter(canBePart);
       if (!items.length) throw Error("閉じた図形または革パーツを選択してください。");
+      const targets = [];
       for (const item of items) {
         const part = makePartFrom(item, false);
-        part.stitchLines.push(makeStitchLine(uid(), { name: `外周 ${part.stitchLines.length + 1}`, source: { subpath: 0, from: null, to: null }, offset: DEFAULT_OFFSET }));
+        const line = makeStitchLine(uid(), { name: `外周 ${part.stitchLines.length + 1}`, source: { subpath: 0, from: null, to: null }, offset: DEFAULT_OFFSET });
+        part.stitchLines.push(line);
+        targets.push(...projectLineDown(part, line));
       }
-    }, "外周に縫い線を追加しました。");
+      return targets;
+    }, (targets) => `外周に縫い線を追加しました。${projectNotice(targets)}`);
+  }
+  // Parts drawn under `part` (earlier in stacking order) whose outline
+  // contains most of the holes of `line` receive a projected copy of it.
+  function projectLineDown(part, line) {
+    const p = project();
+    const d = derivePart(p, part);
+    const st = d.stitch.find((s) => s.line.id === line.id);
+    if (!st || st.error || !st.holes.length || !d.item) return [];
+    const topIndex = p.items.findIndex((i) => i.id === part.itemId);
+    const targets = [];
+    for (const other of leather().parts) {
+      if (other.id === part.id) continue;
+      const item = p.items.find((i) => i.id === other.itemId);
+      const idx = p.items.findIndex((i) => i.id === other.itemId);
+      if (!item || idx < 0 || idx > topIndex) continue;
+      const ring = worldContours(item).find(isClosed);
+      if (!ring) continue;
+      const inside = st.holes.filter((h) => insidePolygon(h, ring)).length;
+      if (inside < Math.max(2, st.holes.length * 0.5)) continue;
+      if (other.stitchLines.some((l) => l.source.kind === "projected" && l.source.lineId === line.id)) continue;
+      other.stitchLines.push(makeStitchLine(uid(), { name: `${part.name} / ${line.name}（投影）`, source: { kind: "projected", partId: part.id, lineId: line.id, placement: relativePlacement(item, d.item) }, offset: 0, pattern: line.pattern }));
+      targets.push(other);
+    }
+    return targets;
+  }
+  const projectNotice = (targets) => (targets.length ? ` 下に重なるパーツ「${targets.map((t) => t.name).join("」「")}」にも同じ穴を付けました（上のパーツを動かしても下の穴は残ります）。` : "");
+  function recapturePlacement(partId, lineId) {
+    mutate(() => {
+      const part = partById(partId), line = part?.stitchLines.find((l) => l.id === lineId);
+      const bottom = project().items.find((i) => i.id === part?.itemId);
+      const src = partById(line?.source.partId);
+      const top = project().items.find((i) => i.id === src?.itemId);
+      if (!line || !bottom || !top) throw Error("投影元が見つかりません。");
+      line.source = { ...line.source, placement: relativePlacement(bottom, top) };
+    }, "今の重なり位置で穴の位置を取り直しました。");
   }
   function unmakePart(partId) {
     mutate((l) => remapItems(l, { removed: [partById(partId)?.itemId] }), "革パーツを解除しました（図形は残ります）。");
@@ -237,10 +289,14 @@ export function createLeatherUI(ctx) {
       const id = uid();
       const nth = list.length + 1;
       if (kind === "fold") part.foldLines.push(makeFoldLine(id, { name: `折り線 ${nth}`, source: { subpath: e.s, from, to }, offset: 0 }));
-      else part.stitchLines.push(makeStitchLine(id, { name: `縫い線 ${nth}`, source: { subpath: e.s, from, to }, offset: DEFAULT_OFFSET }));
+      else {
+        const line = makeStitchLine(id, { name: `縫い線 ${nth}`, source: { subpath: e.s, from, to }, offset: DEFAULT_OFFSET });
+        part.stitchLines.push(line);
+        lastProjection = projectLineDown(part, line);
+      }
       continuing = { partId: part.id, lineId: id, kind };
       return "new";
-    }, (r) => (r === "extended" ? "隣の辺をつなげました。" : r === "closed" ? "一周つながりました。" : kind === "fold" ? "折り線を追加しました。続けて隣の辺をクリックすると延長できます。" : "縫い線を追加しました。続けて隣の辺をクリックすると1本につながります。"));
+    }, (r) => (r === "extended" ? "隣の辺をつなげました。" : r === "closed" ? "一周つながりました。" : kind === "fold" ? "折り線を追加しました。続けて隣の辺をクリックすると延長できます。" : `縫い線を追加しました。続けて隣の辺をクリックすると1本につながります。${projectNotice(lastProjection)}`));
   }
   function addHardwareAt(p) {
     const items = project().items.filter((i) => partOf(i.id) && worldContours(i).some((ring) => isClosed(ring) && insidePolygon(p, ring)));
@@ -299,6 +355,7 @@ export function createLeatherUI(ctx) {
       return made;
     }, (n) => `ミラーコピーを作成しました（${n} パーツ）。元を編集するとコピーに反映されます。コピー側の編集は元に影響しません。`);
   }
+  let lastProjection = [];
   let hwDrag = null; // { partId, hwId, item, start, origin, moved }
   // Snap a hardware position (item-local mm) to the part's centre lines,
   // other hardware on the part, and the 1 mm grid.
@@ -498,6 +555,10 @@ ${rows}
   }
   function stitchBlock(part, line, st) {
     const f = (key) => `stitch|${part.id}|${line.id}|${key}`;
+    if (line.source.kind === "projected") {
+      const src = partById(line.source.partId);
+      return `<details class="leather-line projected" open><summary><span>${esc(line.name)}</span><small>投影 · ${st?.holes.length ?? 0} 穴</small></summary><p class="note">⤓ 上のパーツ「${esc(src?.name ?? "?")}」の縫い線の穴を、重ねたときの位置でこのパーツに写しています。ピッチ・穴の形は元の縫い線で変更します。上のパーツを動かしても、この穴の位置は変わりません。</p>${st?.error ? `<p class="leather-error">${esc(st.error)}</p>` : ""}${st?.dropped ? `<p class="note warn">このパーツの外にある ${st.dropped} 個の穴は省いています。</p>` : ""}<div class="leather-add"><button data-leather-action="recapture" data-part="${part.id}" data-entry="${line.id}">今の重なり位置で取り直す</button></div><button class="text-link danger" data-leather-action="remove-entry" data-part="${part.id}" data-entry="${line.id}">この投影を削除</button></details>`;
+    }
     const p = line.pattern;
     return `<details class="leather-line" open><summary><span>${esc(line.name)}</span><small>${esc(sourceLabel(line.source))} · ${st?.holes.length ?? 0} 穴</small></summary>
 <div class="fields"><label>名前<input data-leather-field="${f("name")}" type="text" value="${esc(line.name)}" maxlength="100"></label>${numField(f("offset"), "縁からの距離", line.offset, 0.5, LIMITS.offset)}</div>
@@ -694,6 +755,7 @@ ${historyPanel(part, item)}
     if (a === "mirror") mirrorSelection();
     else if (a === "detach-mirror") mutate((l) => detachMirror(l, t.dataset.part), "ミラーのリンクを解除しました。以後は独立したパーツです。");
     else if (a.startsWith("history-")) historyAction(a, t.dataset.part, t.dataset.feature);
+    else if (a === "recapture") recapturePlacement(t.dataset.part, t.dataset.entry);
     else if (a === "boolean-union") applyBooleanLeather("union");
     else if (a === "boolean-difference") applyBooleanLeather("difference");
     else if (a === "convert") convertSelection(false);

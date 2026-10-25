@@ -52,7 +52,22 @@ const num = (v, [lo, hi], fallback) => (Number.isFinite(v) ? Math.min(hi, Math.m
 const str = (v, fallback, max = 100) => (typeof v === "string" ? v.slice(0, max) : fallback);
 const index = (v) => (v === null || v === undefined ? null : Number.isInteger(v) && v >= 0 && v < 100000 ? v : undefined);
 
+// A projected line: the holes of another part's stitch line, as they fell
+// on this part when the two were stacked. `placement` is the source item's
+// transform expressed in this part's item-local frame at capture time, so
+// the holes stay put when the pieces are moved apart for cutting and still
+// follow pitch / shape edits of the source line.
 export function normalizeSource(s = {}) {
+  if (s.kind === "projected") {
+    if (typeof s.partId !== "string" || !ID.test(s.partId) || typeof s.lineId !== "string" || !ID.test(s.lineId)) throw Error("投影元の参照が不正です。");
+    const p = s.placement ?? {};
+    return {
+      kind: "projected",
+      partId: s.partId,
+      lineId: s.lineId,
+      placement: { x: num(p.x, [-LIMITS.coordinate, LIMITS.coordinate], 0), y: num(p.y, [-LIMITS.coordinate, LIMITS.coordinate], 0), rotation: num(p.rotation, [-360, 360], 0) },
+    };
+  }
   const from = index(s.from),
     to = index(s.to);
   if (from === undefined || to === undefined) throw Error("辺の参照が不正です。");
@@ -146,6 +161,8 @@ export function remapItems(leather, { removed = [], replaced = {} } = {}) {
   leather.parts = kept;
   // A copy whose source is gone becomes an ordinary, unlinked part.
   for (const p of kept) if (p.mirrorOf && !partIds.has(p.mirrorOf.partId)) delete p.mirrorOf;
+  // Projected lines whose source part is gone disappear with it.
+  for (const p of kept) p.stitchLines = p.stitchLines.filter((l) => l.source.kind !== "projected" || partIds.has(l.source.partId));
   leather.joints = leather.joints.filter((j) => partIds.has(j.a.partId) && partIds.has(j.b.partId));
   return leather;
 }
