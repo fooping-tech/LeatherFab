@@ -9,7 +9,7 @@ import { transform, worldContours } from "../geometry.js";
 import { pathContours } from "../path.js";
 import { workingPathOf } from "../cad.js";
 import { placeHoles, holeContour } from "./stitch.js";
-import { curve, offsetInward, isClosedPolyline, nearestOnPolyline, totalLength, pointAt, slice, nearestArcLength } from "./polyline.js";
+import { curve, offsetInward, isClosedPolyline, nearestOnPolyline, totalLength, pointAt, slice, nearestArcLength, angleAt as tangentDeg } from "./polyline.js";
 import { presetById, hardwareContours } from "./hardware.js";
 import { MATERIALS } from "./model.js";
 
@@ -193,9 +193,33 @@ export function deriveJoint(joint, derivedParts) {
   const count = masterAll.length;
   let slaveResult = slave.st.result,
     slaveHoles = slave.st.allHoles ?? slave.st.holes,
-    adjusted = false;
+    adjusted = false,
+    aligned = false,
+    alignedPattern = null;
+  // Stacked pieces (the two lines lie on top of each other): start the
+  // slave's holes where the master's first hole is and run the same way,
+  // so a closed loop whose path starts elsewhere does not shift its holes
+  // by a fraction of the pitch against the master's.
+  if (slave.st.closed && masterAll.length && slave.st.points?.length > 2) {
+    const c = curve(slave.st.points, true);
+    const h0 = masterAll[0];
+    const hit = nearestOnPolyline(c.points, h0);
+    if (hit.d < 2) {
+      const s0 = c.s[hit.index] + hit.t * (c.s[hit.index + 1] - c.s[hit.index]);
+      const t = tangentDeg(c, s0);
+      const sameWay = Math.cos(((t - h0.tangent) * Math.PI) / 180) >= 0;
+      // A reversed traversal measures the start from the other end of the loop.
+      // Running the loop the other way would mirror the slant (逆目打ち); the
+      // layers are punched together, so flip it back as well.
+      const pat = slave.st.line.pattern;
+      alignedPattern = sameWay ? { ...pat, startOffset: s0 } : { ...pat, startOffset: (c.length - s0) % c.length, reverse: !pat.reverse, flip: !pat.flip };
+      slaveResult = placeHoles(slave.st.points, alignedPattern, { closed: true });
+      slaveHoles = slaveResult.holes.map((h) => ({ ...h, contour: holeContour(h, slave.st.line.pattern) }));
+      aligned = true;
+    }
+  }
   if (slaveHoles.length !== count && count > 0) {
-    slaveResult = placeHoles(slave.st.points, { ...slave.st.line.pattern, fit: "count", count }, { closed: slave.st.closed });
+    slaveResult = placeHoles(slave.st.points, { ...(alignedPattern ?? slave.st.line.pattern), fit: "count", count }, { closed: slave.st.closed });
     slaveHoles = slaveResult.holes.map((h) => ({ ...h, contour: holeContour(h, slave.st.line.pattern) }));
     adjusted = true;
   }
@@ -234,7 +258,7 @@ export function deriveJoint(joint, derivedParts) {
     slaveKept = slaveHoles.filter((h) => keepB.has(h));
     if (maxDeviation > 1) issues.push(issue("warning", `縫合「${joint.name}」: 穴位置の最大ずれ ${maxDeviation.toFixed(2)} mm（縫い合わせると革がよれる可能性があります）。`, { jointId: joint.id }));
   }
-  return { joint, master: master.st, slave: slave.st, masterHoles: masterKept, slaveHoles: slaveKept, slaveResult, adjusted, count, lengthDiff, maxDeviation, pairs, issues };
+  return { joint, master: master.st, slave: slave.st, masterHoles: masterKept, slaveHoles: slaveKept, slaveResult, adjusted: adjusted || aligned, aligned, count, lengthDiff, maxDeviation, pairs, issues };
 }
 // Composition of a part item's world transform with a placement given in
 // that item's local frame: the virtual item where the source part sat.
