@@ -6,6 +6,8 @@
 import { transform, worldContours, bounds } from "./geometry.js";
 import { mirrorItems, axisThrough } from "./cad.js";
 import { createMirrorPart, syncMirrorParts, detachMirror } from "./leather/mirror.js";
+import { baseFromItem, applyHistory, isStale, describeFeature, describeBase, FEATURE_LABELS, normalizeFeature } from "./leather/history.js";
+import { nearestNode } from "./cad.js";
 import { nearestSegment } from "./path.js";
 import { isClosed } from "./polygon.js";
 import {
@@ -135,6 +137,7 @@ export function createLeatherUI(ctx) {
         const next = makePart(part.id, part.itemId, { ...part, [key]: value });
         Object.assign(part, next);
       } else if (kind === "kerf") l.kerf = Math.min(LIMITS.kerf[1], Math.max(0, Number(value) || 0));
+      else if (kind === "history") applyHistoryField(partId, entryId, key, value);
       else if (kind === "joint") {
         const j = l.joints.find((x) => x.id === partId);
         if (!j) return;
@@ -347,6 +350,113 @@ export function createLeatherUI(ctx) {
     return true;
   }
   const dragging = () => Boolean(hwDrag);
+  // ---- parametric history (timeline). A part's outline can be rebuilt from
+  // its base sketch plus features; see leather/history.js.
+  function ensureHistory(part, item) {
+    if (!part.history) part.history = { base: baseFromItem(item, outlinePath(item)), features: [], outputKey: "" };
+    return part.history;
+  }
+  const historyStale = (part, item) => Boolean(part.history) && isStale(item, part.history, outlinePath(item));
+  // Rebuilds the part's item from its history in place; returns the errors.
+  function rebuildFromHistory(part) {
+    const p = project();
+    const k = p.items.findIndex((i) => i.id === part.itemId);
+    if (k < 0) return [];
+    const { item, errors } = applyHistory(p.items[k], part.history);
+    p.items[k] = item;
+    return errors;
+  }
+  // Fillet/chamfer from the CAD tool on a part: recorded as a feature and
+  // replayed, instead of baking the result into the path. Returns the new
+  // item, or null when the part should fall back to the plain operation.
+  function recordCorner(item, point, kind, amount) {
+    const part = partOf(item.id);
+    if (!part || item.warp) return null;
+    if (part.history && historyStale(part, item)) {
+      ctx.notify("外形が履歴の外で編集されているため、この操作は履歴に記録せず直接適用しました。履歴パネルで「再適用」か「履歴を破棄」を選べます。");
+      return null;
+    }
+    const history = ensureHistory(part, item);
+    const path = outlinePath(item);
+    const near = nearestNode(path, item, point);
+    if (!near) return null;
+    const feature = normalizeFeature({ id: uid(), kind, node: near.i, subpath: near.s, radius: amount, distance: amount });
+    const trial = applyHistory(item, { ...history, features: [...history.features, feature] });
+    const failed = trial.errors.find((e) => e.featureId === feature.id);
+    if (failed) throw Error(failed.message);
+    history.features.push(feature);
+    history.outputKey = "";
+    const { item: next } = applyHistory(item, history);
+    return next;
+  }
+  function historyPanel(part, item) {
+    const h = part.history;
+    if (!h) return `<h4>操作履歴 <span>タイムライン</span></h4><p class="note">フィレット・面取り・穴をこのパーツに適用すると、ここに履歴として残り、あとから寸法を変更できます。</p><div class="leather-add"><button data-leather-action="history-start" data-part="${part.id}">◷ 履歴を開始（現在の形を基本形状に）</button></div>`;
+    const stale = historyStale(part, item);
+    const f = (featureId, key) => `history|${part.id}|${featureId}|${key}`;
+    const base = h.base.kind === "rect"
+      ? `<div class="fields">${numField(f("base", "w"), "幅", h.base.w, 0.5, [0.1, 2000])}${numField(f("base", "h"), "高さ", h.base.h, 0.5, [0.1, 2000])}${numField(f("base", "radius"), "角 R", h.base.radius, 0.5, [0, 1000])}</div>`
+      : h.base.kind === "circle"
+        ? `<div class="fields">${numField(f("base", "w"), "幅", h.base.w, 0.5, [0.1, 2000])}${numField(f("base", "h"), "高さ", h.base.h, 0.5, [0.1, 2000])}</div>`
+        : `<p class="note">基本形状は固定パスです（パス編集で変えた形が基準になります）。</p>`;
+    const rows = h.features
+      .map((ft, k) => {
+        const fields =
+          ft.kind === "fillet" ? numField(f(ft.id, "radius"), "半径 R", ft.radius, 0.5, [0.01, 500])
+          : ft.kind === "chamfer" ? numField(f(ft.id, "distance"), "距離", ft.distance, 0.5, [0.01, 500])
+          : ft.kind === "hole" ? numField(f(ft.id, "d"), "直径", ft.d, 0.5, [0.2, 500]) + numField(f(ft.id, "x"), "X", ft.x, 0.5, [-10000, 10000]) + numField(f(ft.id, "y"), "Y", ft.y, 0.5, [-10000, 10000])
+          : numField(f(ft.id, "w"), "幅", ft.w, 0.5, [0.2, 500]) + numField(f(ft.id, "h"), "長さ", ft.h, 0.5, [0.2, 500]) + numField(f(ft.id, "x"), "X", ft.x, 0.5, [-10000, 10000]) + numField(f(ft.id, "y"), "Y", ft.y, 0.5, [-10000, 10000]) + numField(f(ft.id, "rotation"), "回転", ft.rotation, 5, [-360, 360], "°");
+        const err = lastHistoryErrors.get(ft.id);
+        return `<details class="leather-line history-step ${err ? "has-error" : ""}"><summary><span>${k + 1}. ${esc(FEATURE_LABELS[ft.kind])}</span><small>${esc(describeFeature(ft))}</small></summary>${err ? `<p class="leather-error">この操作は現在の寸法では適用できず、飛ばしています: ${esc(err)}</p>` : ""}<div class="fields">${fields}</div>${["fillet", "chamfer"].includes(ft.kind) ? `<p class="note">ノード ${ft.node} は、この操作の時点でのパスの頂点番号です。</p>` : ""}<button class="text-link danger" data-leather-action="history-remove" data-part="${part.id}" data-feature="${ft.id}">この操作を削除</button></details>`;
+      })
+      .join("");
+    return `<h4>操作履歴 <span>タイムライン · ${h.features.length} 操作</span></h4>
+${stale ? `<p class="note mirror-note">⚠ 外形が履歴の外（拡縮ハンドル・パス編集・ブール演算など）で変更されています。<button class="text-link" data-leather-action="history-reapply" data-part="${part.id}">履歴を再適用（変更を捨てる）</button> / <button class="text-link" data-leather-action="history-rebase" data-part="${part.id}">今の形を新しい基本形状にする</button></p>` : ""}
+<details class="leather-line history-step" open><summary><span>0. 基本形状</span><small>${esc(describeBase(h.base))}</small></summary>${base}</details>
+${rows}
+<div class="leather-add"><button data-leather-action="history-hole" data-part="${part.id}">＋ 丸穴</button><button data-leather-action="history-slot" data-part="${part.id}">＋ 長穴</button><button data-tool="fillet" title="CAD のフィレットツール。角をクリックすると履歴に追加">◜ フィレット</button><button data-tool="chamfer" title="CAD の面取りツール。角をクリックすると履歴に追加">◺ 面取り</button><button class="text-link danger" data-leather-action="history-drop" data-part="${part.id}">履歴を破棄（形は残す）</button></div>
+<p class="note">どの段階の寸法も変更でき、外形・縫い穴・金具が追従します。操作を削除すると、それ以降の角の番号がずれることがあります。</p>`;
+  }
+  const lastHistoryErrors = new Map();
+  function historyAction(action, partId, featureId) {
+    const part = partById(partId);
+    const item = project().items.find((i) => i.id === part?.itemId);
+    if (!part || !item) return;
+    mutate(() => {
+      if (action === "history-start") ensureHistory(part, item);
+      else if (action === "history-drop") delete part.history;
+      else if (action === "history-rebase") {
+        part.history = { base: baseFromItem(item, outlinePath(item)), features: [], outputKey: "" };
+        rebuildFromHistory(part);
+      } else if (action === "history-reapply") rebuildFromHistory(part);
+      else if (action === "history-remove") {
+        part.history.features = part.history.features.filter((x) => x.id !== featureId);
+        rebuildFromHistory(part);
+      } else if (action === "history-hole" || action === "history-slot") {
+        const h = ensureHistory(part, item);
+        const box = bounds(worldContours(item).map((ring) => ring.map((q) => transform(q, item, true))));
+        const c = { x: Number((box.x + box.w / 2).toFixed(2)), y: Number((box.y + box.h / 2).toFixed(2)) };
+        h.features.push(normalizeFeature(action === "history-hole" ? { id: uid(), kind: "hole", ...c, d: 4 } : { id: uid(), kind: "slot", ...c, w: 3, h: 12, rotation: 0 }));
+        rebuildFromHistory(part);
+      }
+      return part;
+    }, action === "history-start" ? "履歴を開始しました。これ以降のフィレット・面取り・穴が記録されます。" : action === "history-drop" ? "履歴を破棄しました。形はそのまま残ります。" : null);
+  }
+  function applyHistoryField(partId, featureId, key, value) {
+    const part = partById(partId);
+    if (!part?.history) return;
+    if (featureId === "base") {
+      if (!(key in part.history.base)) return;
+      part.history.base[key] = Number(value);
+    } else {
+      const ft = part.history.features.find((x) => x.id === featureId);
+      if (!ft || !(key in ft)) return;
+      ft[key] = Number(value);
+    }
+    const errors = rebuildFromHistory(part);
+    lastHistoryErrors.clear();
+    for (const e of errors) lastHistoryErrors.set(e.featureId, e.message);
+  }
   // ---- joints
   function createJoint(aPart, aLine, bPart, bLine, reverse) {
     mutate((l) => {
@@ -445,6 +555,7 @@ export function createLeatherUI(ctx) {
 ${issues.length ? `<ul class="leather-warnings">${issues.map((i) => `<li class="${i.level}">${esc(i.message)}</li>`).join("")}</ul>` : ""}
 ${part.mirrorOf ? `<p class="note mirror-note">⇔ ミラー元「${esc(partById(part.mirrorOf.partId)?.name ?? "?")}」にリンク中。元の外形・縫い線・折り線・金具・革厚の変更がこのコピーに反映されます（コピー側で変えた設定は、元が変わると上書きされます）。<button class="text-link" data-leather-action="detach-mirror" data-part="${part.id}">リンクを解除して独立させる</button></p>` : ""}
 ${(() => { const copies = leather().parts.filter((p) => p.mirrorOf?.partId === part.id); return copies.length ? `<p class="note">⇔ このパーツのミラーコピー: ${copies.map((c) => esc(c.name)).join("、")}（このパーツの変更が反映されます）</p>` : ""; })()}
+${historyPanel(part, item)}
 <h4>縫い線 <span>${part.stitchLines.length}</span></h4>${part.stitchLines.map((line) => stitchBlock(part, line, dp?.stitch.find((s) => s.line.id === line.id))).join("")}
 <div class="leather-add"><button data-leather-action="add-full-stitch">＋ 全周に縫い線</button><button data-tool="stitch-edge" class="${ctx.tool() === "stitch-edge" ? "active" : ""}">＋ 辺を選んで縫い線</button></div>
 <h4>折り線 <span>${part.foldLines.length}</span></h4>${part.foldLines.map((fold) => foldBlock(part, fold, dp?.folds.find((x) => x.fold.id === fold.id))).join("")}
@@ -582,6 +693,7 @@ ${(() => { const copies = leather().parts.filter((p) => p.mirrorOf?.partId === p
     const a = t.dataset.leatherAction;
     if (a === "mirror") mirrorSelection();
     else if (a === "detach-mirror") mutate((l) => detachMirror(l, t.dataset.part), "ミラーのリンクを解除しました。以後は独立したパーツです。");
+    else if (a.startsWith("history-")) historyAction(a, t.dataset.part, t.dataset.feature);
     else if (a === "boolean-union") applyBooleanLeather("union");
     else if (a === "boolean-difference") applyBooleanLeather("difference");
     else if (a === "convert") convertSelection(false);
@@ -720,7 +832,7 @@ ${(() => { const copies = leather().parts.filter((p) => p.mirrorOf?.partId === p
   return {
     derived, panelHTML, overlay, previewHTML, checksHTML, exportSVG, handleClick, handleInput, handleChange, pointerDown, pointerMove, cancel,
     onItemsRemoved, onItemsReplaced, modeText, hint, toolbarHTML, menuEntries, menuActions, isLeatherTool, isPart, partColor, anyConvertible,
-    convertSelection, placeTemplate, TEMPLATES, mirrorPartsFor, mirrorSelection, syncMirrors, hardwarePointerUp, dragging,
+    convertSelection, placeTemplate, TEMPLATES, mirrorPartsFor, mirrorSelection, syncMirrors, hardwarePointerUp, dragging, recordCorner,
     anyPartSelected: () => ctx.selectedItems().some((i) => partOf(i.id)),
   };
 }
