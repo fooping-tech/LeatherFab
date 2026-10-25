@@ -21,6 +21,7 @@
 //     reverse: boolean, master: "a" | "b" }
 import { normalizePattern, DEFAULT_PATTERN } from "./stitch.js";
 import { validateHardwarePreset } from "./hardware.js";
+import { normalizeHistory } from "./history.js";
 
 export const SCHEMA_VERSION = 1;
 export const OPERATIONS = Object.freeze({ CUT: "CUT", PUNCH: "PUNCH", SCORE: "SCORE", ENGRAVE: "ENGRAVE" });
@@ -85,6 +86,7 @@ export function makePart(id, itemId, overrides = {}) {
     hardware: (overrides.hardware ?? []).map((h) => makeHardware(h.id, h)),
     outlineOperation: overrides.outlineOperation in OPERATIONS ? overrides.outlineOperation : "CUT",
     ...(overrides.mirrorOf ? { mirrorOf: normalizeMirrorOf(overrides.mirrorOf) } : {}),
+    ...(overrides.history ? { history: normalizeHistory(overrides.history) } : {}),
   };
 }
 // A mirrored copy linked to its source part: the source's outline and

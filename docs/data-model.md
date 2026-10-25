@@ -32,6 +32,7 @@
 | `foldLines` | FoldLine[] | 折り線 |
 | `hardware` | HardwarePlacement[] | 金具 |
 | `outlineOperation` | `CUT` 等 | 外形の加工属性 |
+| `history` | optional | 操作履歴 `{ base, features, outputKey }`。`base` は `rect{w,h,radius}` / `circle{w,h}` / `path{path}`、`features` は `fillet{node,radius,subpath}` / `chamfer{node,distance,subpath}` / `hole{x,y,d}` / `slot{x,y,w,h,rotation}`。`regenerate()` が基本形状から順に適用し、失敗した操作は飛ばして報告。`outputKey` は最後に生成したパスの指紋で、履歴外の編集（stale）の検出に使う。フィレット／面取りは 1 ノードを 2 ノードにするため、後続のノード番号はパラメータ変更に対して安定 |
 | `mirrorOf` | optional | ミラーコピーのリンク `{ partId, axis: {a, b}, itemKey, partKey }`。元パーツの外形（item）と設定（part）の指紋を保持し、変わったら `syncMirrorParts()` がコピーの外形を再反転し設定を鏡像で作り直す（線・金具の id は位置で引き継ぐ）。一方向。元が削除されるとリンクは外れる |
 
 ## Geometry source（辺の参照）

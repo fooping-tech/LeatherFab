@@ -2353,8 +2353,12 @@ function cadPointerDown(p, hitId, mmPerPx) {
         if (!partner) throw Error("端点で接している別の線分が見つかりません。2本の線分の接点付近をクリックしてください。");
         const joined = cornerOfLines(item, partner, amount, t, uid());
         replaceItems([item, partner], [joined]);
-      } else replaceItems([item], [cornerItem(item, p, amount, t, uid())]);
-      notify(`${CAD_TOOLS[t].label}を適用しました（取り消し可）。`);
+      } else {
+        // LeatherFab: on a part the corner becomes a history feature.
+        const recorded = leather.recordCorner(item, p, t, amount);
+        replaceItems([item], [recorded ?? cornerItem(item, p, amount, t, uid())]);
+      }
+      notify(`${CAD_TOOLS[t].label}を適用しました（取り消し可${leather.isPart(selectedItem()?.id) ? "・履歴に記録" : ""}）。`);
     } else if (t === "measure") {
       const item = hitId ? project.items.find((i) => i.id === hitId) : null;
       if (item && !cad.points.length && ["line", "circle"].includes(item.type)) {
