@@ -75,8 +75,12 @@ export function normalizeSource(s = {}) {
   const subpath = Number.isInteger(s.subpath) && s.subpath >= 0 && s.subpath < 10000 ? s.subpath : 0;
   return { subpath, from, to };
 }
-export function makeStitchLine(id, { name = "縫い線", source = { subpath: 0, from: null, to: null }, offset = DEFAULT_OFFSET, pattern = DEFAULT_PATTERN } = {}) {
-  return { id, name, source: normalizeSource(source), offset: num(offset, LIMITS.offset, DEFAULT_OFFSET), pattern: normalizePattern(pattern) };
+// `skipped` lists holes the user removed one by one, as normalised positions
+// u = s / length along the line (0..1), so the removal survives pitch and
+// outline changes: the hole nearest to each u is left out.
+export function makeStitchLine(id, { name = "縫い線", source = { subpath: 0, from: null, to: null }, offset = DEFAULT_OFFSET, pattern = DEFAULT_PATTERN, skipped = [] } = {}) {
+  const skips = (Array.isArray(skipped) ? skipped : []).map((k) => ({ u: num(k?.u, [0, 1], 0) })).slice(0, 2000);
+  return { id, name, source: normalizeSource(source), offset: num(offset, LIMITS.offset, DEFAULT_OFFSET), pattern: normalizePattern(pattern), ...(skips.length ? { skipped: skips } : {}) };
 }
 export function makeFoldLine(id, { name = "折り線", source, offset = 0, kind = "mountain" } = {}) {
   return { id, name, source: normalizeSource(source), offset: num(offset, LIMITS.offset, 0), kind: kind === "valley" ? "valley" : "mountain", operation: "SCORE" };
