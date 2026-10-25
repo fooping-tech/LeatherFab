@@ -333,6 +333,8 @@ function saveFreehandParams() {
 // pull to the centre and edge lines of the others and of the board.
 const ALIGN_SNAP_KEY = "leatherfab-align-snap";
 let alignSnap = true;
+// Sticky multi-select (phones have no Shift): taps add to the selection.
+let multiSelect = false;
 try {
   alignSnap = localStorage.getItem(ALIGN_SNAP_KEY) !== "off";
 } catch {}
@@ -1040,7 +1042,7 @@ $("#app").innerHTML = `
   )}</div>${leather.toolbarHTML()}<div class="tool-group"><button id="auto-bridge" class="tool"><span class="tool-icon">✧</span>選択にブリッジ</button><button id="smart-connect" class="tool" title="文字どうし・文字内の部位を接続形状でつないで1つの輪郭にする（Smart Connect）"><span class="tool-icon">⟟</span>スマート接続</button><button id="outline" class="tool"><span class="tool-icon">T̲</span>アウトライン化</button><button id="group" class="tool" title="選択をグループ化 (${shortcut("G")})"><span class="tool-icon">▣</span>グループ化</button><button id="ungroup" class="tool" title="グループを解除、または文字を1文字ずつ・部位ごとに分解 (${shortcut("G", true)})"><span class="tool-icon">⊞</span>グループ化解除</button><button id="warp" class="tool" title="文字のアウトラインをエンベロープで変形（Text Warp）"><span class="tool-icon">⌒</span>ワープ</button><button id="edit-path" class="tool" title="パスのノードを直接編集（ダブルクリックでも開始）"><span class="tool-icon">✎</span>パス編集</button></div><div class="tool-group history"><button id="undo" title="元に戻す (Ctrl/⌘ Z)">↶</button><button id="redo" title="やり直す (Ctrl/⌘ Shift Z)">↷</button></div><button id="preview" class="preview-button">◎ 加工プレビュー</button></nav>
 <nav class="toolbar cad-toolbar" aria-label="2D CADツール">${CAD_GROUPS.map((g) => `<div class="tool-group"><span class="tool-group-label">${g}</span>${Object.entries(CAD_TOOLS).filter(([, t]) => t.group === g).map(([id, t]) => `<button data-tool="${id}" class="tool cad-tool" title="${t.hint}"><span class="tool-icon">${t.icon}</span>${t.label}</button>`).join("")}</div>`).join("")}<span class="subtle cad-note">拘束なしの2D編集 · 結果は通常のパス · 寸法は参照のみ</span></nav></div>
 <main><aside class="layers-panel"><div class="panel-heading">ブラウザ<span class="eyebrow">OBJECTS</span><button class="sheet-close" data-close-sheet aria-label="閉じる">×</button></div><div class="document-row"><button id="add-layer">＋ レイヤー</button><span class="note">Shiftで範囲 · ${isMac ? "⌘" : "Ctrl"}で追加 · 右クリックでメニュー</span></div><div id="layers"></div><div class="layer-actions"><button id="duplicate">＋ 複製</button><button id="delete">⌫ 削除</button></div><div class="left-bottom"><div class="eyebrow">LEATHER PATTERN</div><h3>革の型紙を、すぐに。</h3><p>図形を描いて「縫い穴を作る」。<br>外形を変えても穴が追従します。</p><button id="add-text" class="text-link">＋ 文字（刻印）を追加</button></div></aside>
-<section class="canvas-panel" aria-label="デザインキャンバス"><div class="canvas-top"><span><i class="green-dot"></i> <span id="canvas-mode">スケッチ編集中</span></span><span id="board-label"></span></div><div id="canvas-scroll"><div id="canvas-stage"><div id="board-wrap"><svg id="canvas" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="加工エリア。ツールを選んで配置、またはオブジェクトをドラッグ"><defs><pattern id="small-grid" width="5" height="5" patternUnits="userSpaceOnUse"><path d="M 5 0 L 0 0 0 5" fill="none" stroke="#dce2e8" stroke-width="0.12"/></pattern><pattern id="grid" width="25" height="25" patternUnits="userSpaceOnUse"><rect width="25" height="25" fill="url(#small-grid)"/><path d="M 25 0 L 0 0 0 25" fill="none" stroke="#c4cdd7" stroke-width="0.2"/></pattern></defs><rect id="paper" width="100%" height="100%" fill="url(#grid)"/><g id="objects"></g><g id="selection"></g><rect id="marquee" hidden pointer-events="none" fill="#3889c4" fill-opacity=".12" stroke="#3889c4" stroke-width=".25" stroke-dasharray="1.5 1"/><path id="ink" fill="none" stroke="#c8793f" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/></svg><span class="origin-label">0, 0</span></div></div></div><div id="selection-bar" class="selection-bar" hidden role="toolbar" aria-label="複数選択の操作"><span id="selection-bar-label"></span><button data-boolean="union" title="選択した図形を1つの領域にする">∪ 合体</button><button data-boolean="difference" title="最初に選択した図形から残りを抜く">− 抜く</button><button data-boolean="intersection" title="すべてに共通する部分を残す">∩ 交差</button><button data-boolean="xor" title="重なる部分を除く">⊕ XOR</button><button id="selection-bar-stitch" title="選択した閉じた図形を革パーツにして縫い穴を作る">✦ 縫い穴</button></div><div class="canvas-bottom"><label class="check"><input type="checkbox" id="snap" checked> 1 mm スナップ</label><label class="check" title="ほかのオブジェクトや加工エリアの中心・端にそろえる"><input type="checkbox" id="align-snap" checked> 整列スナップ</label><button class="canvas-btn draw-btn" data-tool="freehand" title="フリーハンドで描く">✎ 描く</button><button class="canvas-btn select-btn" data-tool="select" title="選択">↖ 選択</button><div class="zoom-controls"><button id="zoom-out" aria-label="縮小">−</button><button id="zoom-reset">100%</button><button id="zoom-in" aria-label="拡大">＋</button></div><span class="axis"><b>Y</b> ↓ &nbsp; → <em>X</em></span></div><div id="hint" class="canvas-hint"></div></section>
+<section class="canvas-panel" aria-label="デザインキャンバス"><div class="canvas-top"><span><i class="green-dot"></i> <span id="canvas-mode">スケッチ編集中</span></span><span id="board-label"></span></div><div id="canvas-scroll"><div id="canvas-stage"><div id="board-wrap"><svg id="canvas" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="加工エリア。ツールを選んで配置、またはオブジェクトをドラッグ"><defs><pattern id="small-grid" width="5" height="5" patternUnits="userSpaceOnUse"><path d="M 5 0 L 0 0 0 5" fill="none" stroke="#dce2e8" stroke-width="0.12"/></pattern><pattern id="grid" width="25" height="25" patternUnits="userSpaceOnUse"><rect width="25" height="25" fill="url(#small-grid)"/><path d="M 25 0 L 0 0 0 25" fill="none" stroke="#c4cdd7" stroke-width="0.2"/></pattern></defs><rect id="paper" width="100%" height="100%" fill="url(#grid)"/><g id="objects"></g><g id="selection"></g><rect id="marquee" hidden pointer-events="none" fill="#3889c4" fill-opacity=".12" stroke="#3889c4" stroke-width=".25" stroke-dasharray="1.5 1"/><path id="ink" fill="none" stroke="#c8793f" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/></svg><span class="origin-label">0, 0</span></div></div></div><div id="selection-bar" class="selection-bar" hidden role="toolbar" aria-label="複数選択の操作"><span id="selection-bar-label"></span><button data-boolean="union" title="選択した図形を1つの領域にする">∪ 合体</button><button data-boolean="difference" title="最初に選択した図形から残りを抜く">− 抜く</button><button data-boolean="intersection" title="すべてに共通する部分を残す">∩ 交差</button><button data-boolean="xor" title="重なる部分を除く">⊕ XOR</button><button id="selection-bar-stitch" title="選択した閉じた図形を革パーツにして縫い穴を作る">✦ 縫い穴</button></div><div class="canvas-bottom"><label class="check"><input type="checkbox" id="snap" checked> 1 mm スナップ</label><label class="check" title="ほかのオブジェクトや加工エリアの中心・端にそろえる"><input type="checkbox" id="align-snap" checked> 整列スナップ</label><button class="canvas-btn draw-btn" data-tool="freehand" title="フリーハンドで描く">✎ 描く</button><button class="canvas-btn select-btn" data-tool="select" title="選択">↖ 選択</button><button class="canvas-btn multi-btn" id="multi-select" title="オンの間はタップ／クリックで選択に追加（Shift の代わり）" aria-pressed="false">☐ 複数選択</button><div class="zoom-controls"><button id="zoom-out" aria-label="縮小">−</button><button id="zoom-reset">100%</button><button id="zoom-in" aria-label="拡大">＋</button></div><span class="axis"><b>Y</b> ↓ &nbsp; → <em>X</em></span></div><div id="hint" class="canvas-hint"></div></section>
 <aside class="inspector"><div class="panel-heading">プロパティ<span class="eyebrow">INSPECTOR</span><button class="sheet-close" data-close-sheet aria-label="閉じる">×</button></div><div id="properties"></div><section class="board-settings" id="board-settings"></section><section class="cut-check"><h4><span class="check-icon">◇</span> 加工チェック</h4><div id="checks"></div><p id="check-note"></p></section></aside></main>
 <nav class="mobile-bar" aria-label="モバイル操作"><button data-sheet="objects"><span>☰</span>オブジェクト</button><button data-sheet="tools"><span>✚</span>ツール</button><button data-sheet="inspector"><span>⚙</span>編集<small id="bar-badge"></small></button><button id="mobile-preview"><span>◎</span>プレビュー</button><button id="mobile-fit"><span>⛶</span>全体</button></nav>
 <footer><span id="message" role="status" aria-live="polite">フォントを読み込んでいます…</span><span><i class="legend cut"></i> CUT <i class="legend punch"></i> PUNCH <i class="legend score"></i> SCORE &nbsp; <button id="font-licenses-button" class="text-link">フォントライセンス</button> <span class="subtle">LeatherFab / 0.1 · based on TypeFab</span></span></footer>
@@ -1569,7 +1571,7 @@ function renderCanvas() {
         : pathEdit
           ? "ノード・ハンドルをドラッグ · Shiftで追加選択 · パス上をダブルクリックで追加 · Deleteで削除 · Escで終了"
           : tool === "select"
-            ? "ドラッグ中はほかの中心・端に整列スナップ · 空白からドラッグで範囲選択 · 右クリック／長押しで編集メニュー · ピンチでズーム"
+            ? "ドラッグ中はほかの中心・端に整列スナップ · 空白からドラッグで範囲選択 · 右クリック／長押しで編集メニュー · ピンチでズーム · 1つを押さえたまま別をタップで追加選択"
             : tool === "freehand"
               ? "ペン・指・マウスでドラッグして描く · 始点の近くで終えると閉じた図形 · タップで選択"
               : (CAD_TOOLS[tool]?.hint ?? leather.hint(tool) ?? `${labels[tool]}を配置する場所をクリック`);
@@ -1628,6 +1630,9 @@ function render({ properties = true } = {}) {
   const booleanable = selectedItems().filter((i) => !["bridge", "line"].includes(i.type));
   const showBar = !preview && !cad && !sc && !pathEdit && !warpId && booleanable.length >= 2;
   $("#selection-bar").hidden = !showBar;
+  $("#multi-select").classList.toggle("active", multiSelect);
+  $("#multi-select").setAttribute("aria-pressed", String(multiSelect));
+  $("#multi-select").textContent = multiSelect ? "☑ 複数選択" : "☐ 複数選択";
   if (showBar) {
     $("#selection-bar-label").textContent = `${booleanable.length} 個を選択 · 土台: ${booleanable[0].name}`;
     $("#selection-bar-stitch").disabled = !leather.anyConvertible();
@@ -3598,6 +3603,11 @@ document.addEventListener("click", (e) => {
   const mode = e.target.closest("[data-fabrication]");
   if (mode) setFabrication(mode.dataset.fabrication);
   if (e.target.closest("#leather-convert, #selection-bar-stitch")) return leather.convertSelection(true);
+  if (e.target.closest("#multi-select")) {
+    multiSelect = !multiSelect;
+    render();
+    return notify(multiSelect ? "複数選択モード: タップ／クリックで選択に追加します。もう一度押すと解除。" : "複数選択モードを解除しました。");
+  }
   const bar = e.target.closest("#selection-bar [data-boolean]");
   if (bar) return applyBoolean(bar.dataset.boolean);
   if (e.target.closest("#leather-mirror")) return leather.mirrorSelection();
@@ -4193,7 +4203,7 @@ $("#canvas").addEventListener("pointerdown", (e) => {
       kind: "marquee",
       start: p,
       end: p,
-      base: e.shiftKey || e.ctrlKey || e.metaKey ? selectionIds() : [],
+      base: e.shiftKey || e.ctrlKey || e.metaKey || multiSelect ? selectionIds() : [],
       moved: false,
     };
     $("#canvas").setPointerCapture(e.pointerId);
@@ -4202,8 +4212,8 @@ $("#canvas").addEventListener("pointerdown", (e) => {
   }
   // A double click (released without moving) opens the text editor on text
   // and Path Edit Mode on paths and shapes; a click-then-drag still moves.
-  const twice = doublePress(e, id) && !e.shiftKey;
-  if (e.shiftKey || e.ctrlKey || e.metaKey) {
+  const twice = doublePress(e, id) && !e.shiftKey && !multiSelect;
+  if (e.shiftKey || e.ctrlKey || e.metaKey || multiSelect) {
     selectGroupOf(id, true);
     render();
     return;
@@ -4553,6 +4563,20 @@ $("#canvas-scroll").addEventListener(
       return;
     }
     touchPoints.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+    // Hold one object and tap another: the second finger adds it to the
+    // selection instead of starting a pinch (LeatherFab touch multi-select).
+    const tapped = e.target.closest?.("[data-object]")?.dataset.object;
+    if (touchPoints.size === 2 && drag?.kind === "move" && !drag.moved && tapped && !selectionIds().includes(tapped) && isEditable(project, project.items.find((i) => i.id === tapped))) {
+      touchPoints.delete(e.pointerId);
+      cancelLongPress();
+      drag = null;
+      selectGroupOf(tapped, true);
+      render();
+      notify(`${selectedItems().length} 個を選択中 · 押さえたまま別のオブジェクトをタップすると追加できます。`);
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (touchPoints.size === 2) {
       if (drag?.moved && ["move", "resize"].includes(drag.kind)) {
         project = JSON.parse(history.pop());

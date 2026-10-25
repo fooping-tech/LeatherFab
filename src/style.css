@@ -2344,3 +2344,5 @@ dialog .primary {
   .selection-bar { bottom: 70px; gap: 4px; padding: 5px 6px; max-width: calc(100% - 16px); overflow-x: auto; }
   .selection-bar span { display: none; }
 }
+
+.canvas-btn.multi-btn.active { background: #f3e4d2; border-color: #b57747; color: #8a5a30; }
