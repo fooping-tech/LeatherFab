@@ -5,6 +5,7 @@
 // edits project.leather.
 import { transform, worldContours, bounds } from "./geometry.js";
 import { mirrorItems, axisThrough } from "./cad.js";
+import { createMirrorPart, syncMirrorParts, detachMirror } from "./leather/mirror.js";
 import { nearestSegment } from "./path.js";
 import { isClosed } from "./polygon.js";
 import {
@@ -262,28 +263,23 @@ export function createLeatherUI(ctx) {
   // geometry is mirrored), with hole slants flipped so the holes of the two
   // pieces are mirror images. The copy is independent afterwards — edit one
   // side only — and a joint keeps the hole counts equal.
-  function mirrorPartsFor(oldItems, newItems) {
+  function mirrorPartsFor(oldItems, newItems, axis) {
     const l = leather();
     let made = 0;
     oldItems.forEach((item, k) => {
       const src = partOf(item.id),
         copyItem = newItems[k];
       if (!src || !copyItem || partOf(copyItem.id)) return;
-      const copy = makePart(uid(), copyItem.id, {
-        ...structuredClone(src),
-        name: `${src.name} ミラー`,
-        side: src.side === "front" ? "back" : "front",
-      });
-      copy.stitchLines = src.stitchLines.map((line) => makeStitchLine(uid(), { ...structuredClone(line), pattern: { ...line.pattern, flip: !line.pattern.flip } }));
-      copy.foldLines = src.foldLines.map((f) => makeFoldLine(uid(), structuredClone(f)));
-      copy.hardware = src.hardware.map((h) => makeHardware(uid(), structuredClone(h)));
+      const { copy, joints } = createMirrorPart(src, item, copyItem, axis, uid);
       l.parts.push(copy);
-      src.stitchLines.forEach((line, n) => {
-        l.joints.push(makeJoint(uid(), { name: `${src.name} × ミラー`, a: { partId: src.id, lineId: line.id }, b: { partId: copy.id, lineId: copy.stitchLines[n].id }, reverse: false, master: "a" }));
-      });
+      l.joints.push(...joints);
       made++;
     });
     return made;
+  }
+  // Re-mirrors linked copies whose source changed (called on every render).
+  function syncMirrors() {
+    return syncMirrorParts(project(), uid);
   }
   // Mirror copy of the selected parts about a vertical axis just right of them.
   function mirrorSelection() {
@@ -295,10 +291,10 @@ export function createLeatherUI(ctx) {
       const [a, b] = axisThrough({ x: box.x + box.w + gap / 2, y: box.y + box.h / 2 }, "vertical");
       const copies = mirrorItems(items, a, b, uid);
       project().items.push(...copies);
-      const made = mirrorPartsFor(items, copies);
+      const made = mirrorPartsFor(items, copies, { a, b });
       ctx.selectIds(copies.map((i) => i.id));
       return made;
-    }, (n) => `ミラーコピーを作成しました（${n} パーツ）。縫い穴は左右対称（穴の傾きも反転）で、縫合により穴数を合わせます。ミラー側だけを編集できます。`);
+    }, (n) => `ミラーコピーを作成しました（${n} パーツ）。元を編集するとコピーに反映されます。コピー側の編集は元に影響しません。`);
   }
   let hwDrag = null; // { partId, hwId, item, start, origin, moved }
   // Snap a hardware position (item-local mm) to the part's centre lines,
@@ -447,6 +443,8 @@ export function createLeatherUI(ctx) {
 <label class="full-label">材料${sel(f("material"), Object.fromEntries(Object.entries(MATERIALS).map(([k, v]) => [k, v.label])), part.material)}</label><p class="note material-${mat.laser}">${LASER_LABELS[mat.laser]} · ${esc(mat.note)}</p>
 <label class="full-label">外形の加工${sel(f("outlineOperation"), OPERATION_LABELS, part.outlineOperation)}</label>
 ${issues.length ? `<ul class="leather-warnings">${issues.map((i) => `<li class="${i.level}">${esc(i.message)}</li>`).join("")}</ul>` : ""}
+${part.mirrorOf ? `<p class="note mirror-note">⇔ ミラー元「${esc(partById(part.mirrorOf.partId)?.name ?? "?")}」にリンク中。元の外形・縫い線・折り線・金具・革厚の変更がこのコピーに反映されます（コピー側で変えた設定は、元が変わると上書きされます）。<button class="text-link" data-leather-action="detach-mirror" data-part="${part.id}">リンクを解除して独立させる</button></p>` : ""}
+${(() => { const copies = leather().parts.filter((p) => p.mirrorOf?.partId === part.id); return copies.length ? `<p class="note">⇔ このパーツのミラーコピー: ${copies.map((c) => esc(c.name)).join("、")}（このパーツの変更が反映されます）</p>` : ""; })()}
 <h4>縫い線 <span>${part.stitchLines.length}</span></h4>${part.stitchLines.map((line) => stitchBlock(part, line, dp?.stitch.find((s) => s.line.id === line.id))).join("")}
 <div class="leather-add"><button data-leather-action="add-full-stitch">＋ 全周に縫い線</button><button data-tool="stitch-edge" class="${ctx.tool() === "stitch-edge" ? "active" : ""}">＋ 辺を選んで縫い線</button></div>
 <h4>折り線 <span>${part.foldLines.length}</span></h4>${part.foldLines.map((fold) => foldBlock(part, fold, dp?.folds.find((x) => x.fold.id === fold.id))).join("")}
@@ -583,6 +581,7 @@ ${issues.length ? `<ul class="leather-warnings">${issues.map((i) => `<li class="
     }
     const a = t.dataset.leatherAction;
     if (a === "mirror") mirrorSelection();
+    else if (a === "detach-mirror") mutate((l) => detachMirror(l, t.dataset.part), "ミラーのリンクを解除しました。以後は独立したパーツです。");
     else if (a === "boolean-union") applyBooleanLeather("union");
     else if (a === "boolean-difference") applyBooleanLeather("difference");
     else if (a === "convert") convertSelection(false);
@@ -721,7 +720,7 @@ ${issues.length ? `<ul class="leather-warnings">${issues.map((i) => `<li class="
   return {
     derived, panelHTML, overlay, previewHTML, checksHTML, exportSVG, handleClick, handleInput, handleChange, pointerDown, pointerMove, cancel,
     onItemsRemoved, onItemsReplaced, modeText, hint, toolbarHTML, menuEntries, menuActions, isLeatherTool, isPart, partColor, anyConvertible,
-    convertSelection, placeTemplate, TEMPLATES, mirrorPartsFor, mirrorSelection, hardwarePointerUp, dragging,
+    convertSelection, placeTemplate, TEMPLATES, mirrorPartsFor, mirrorSelection, syncMirrors, hardwarePointerUp, dragging,
     anyPartSelected: () => ctx.selectedItems().some((i) => partOf(i.id)),
   };
 }

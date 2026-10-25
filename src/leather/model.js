@@ -84,7 +84,16 @@ export function makePart(id, itemId, overrides = {}) {
     foldLines: (overrides.foldLines ?? []).map((l) => makeFoldLine(l.id, l)),
     hardware: (overrides.hardware ?? []).map((h) => makeHardware(h.id, h)),
     outlineOperation: overrides.outlineOperation in OPERATIONS ? overrides.outlineOperation : "CUT",
+    ...(overrides.mirrorOf ? { mirrorOf: normalizeMirrorOf(overrides.mirrorOf) } : {}),
   };
+}
+// A mirrored copy linked to its source part: the source's outline and
+// settings are re-mirrored into the copy whenever they change (one way).
+// `itemKey` / `partKey` remember what was last synced.
+export function normalizeMirrorOf(m) {
+  const pt = (q) => ({ x: num(q?.x, [-LIMITS.coordinate, LIMITS.coordinate], 0), y: num(q?.y, [-LIMITS.coordinate, LIMITS.coordinate], 0) });
+  if (!m || typeof m.partId !== "string" || !ID.test(m.partId) || !m.axis) throw Error("ミラーのリンクが不正です。");
+  return { partId: m.partId, axis: { a: pt(m.axis.a), b: pt(m.axis.b) }, itemKey: str(m.itemKey, "", 200), partKey: str(m.partKey, "", 200) };
 }
 export function makeJoint(id, { name = "縫合", a, b, reverse = false, master = "a" }) {
   const ref = (r) => {
@@ -133,6 +142,8 @@ export function remapItems(leather, { removed = [], replaced = {} } = {}) {
   const kept = leather.parts.filter((p) => !gone.has(p.itemId));
   const partIds = new Set(kept.map((p) => p.id));
   leather.parts = kept;
+  // A copy whose source is gone becomes an ordinary, unlinked part.
+  for (const p of kept) if (p.mirrorOf && !partIds.has(p.mirrorOf.partId)) delete p.mirrorOf;
   leather.joints = leather.joints.filter((j) => partIds.has(j.a.partId) && partIds.has(j.b.partId));
   return leather;
 }
