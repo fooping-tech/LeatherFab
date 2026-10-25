@@ -25,6 +25,7 @@ import { pathContours } from "./path.js";
 export const LEATHER_TOOLS = Object.freeze({
   "hole-erase": { label: "穴を消す", icon: "⊘", hint: "消したい縫い穴をタップ／クリック · 薄く表示された消した穴をタップすると戻る · Escで終了" },
   "stitch-edge": { label: "辺に縫い線", icon: "⋯", hint: "革パーツの辺をクリックして縫い線を追加 · 隣の辺を続けてクリックすると1本につながる · Escで終了" },
+  seam: { label: "縫い合わせ", icon: "⟗", hint: "縫い合わせる辺を2つクリック: 1つ目のパーツの辺 → 相手のパーツの辺 · 両方に同じ設定の縫い線を作り、穴数と位置を合わせます · Escで終了" },
   "fold-edge": { label: "辺に折り線", icon: "⌇", hint: "革パーツの辺をクリックして、その辺に平行な折り線（SCORE）を追加 · Escで終了" },
   hardware: { label: "金具", icon: "◎", hint: "革パーツの上をクリックして金具（穴）を配置 · Escで終了" },
 });
@@ -566,6 +567,54 @@ ${rows}
     lastHistoryErrors.clear();
     for (const e of errors) lastHistoryErrors.set(e.featureId, e.message);
   }
+  // ---- seam tool: two edge clicks on two parts → matching stitch lines + joint.
+  let seamFirst = null; // { partId, e }
+  function seamClick(p, mmPerPx) {
+    const edge = pickEdge(p, mmPerPx * 12);
+    if (!edge) return ctx.notify(seamFirst ? "相手の革パーツの辺をクリックしてください。" : "縫い合わせる1つ目の辺（革パーツの縁）をクリックしてください。");
+    if (!seamFirst) {
+      seamFirst = { partId: edge.partId, e: edge };
+      ctx.selectIds([edge.itemId]);
+      ctx.renderCanvas();
+      return ctx.notify("1つ目の辺を選びました。次に相手のパーツの縫い合わせる辺をクリックしてください。");
+    }
+    if (edge.partId === seamFirst.partId) {
+      seamFirst = { partId: edge.partId, e: edge };
+      ctx.renderCanvas();
+      return ctx.notify("同じパーツの辺です。相手のパーツの辺をクリックしてください（1つ目を選び直しました）。");
+    }
+    const first = seamFirst;
+    seamFirst = null;
+    mutate(() => {
+      const A = partById(first.partId), B = partById(edge.partId);
+      const seed = templateLine([A, B]);
+      // Reuse a line that already covers exactly this edge, else create one.
+      const lineFor = (part, e, label) => {
+        const n = e.path[e.s].nodes.length, from = e.i, to = (e.i + 1) % n;
+        let line = part.stitchLines.find((l) => l.source.kind !== "projected" && l.source.subpath === e.s && l.source.from === from && l.source.to === to);
+        if (!line) {
+          line = makeStitchLine(uid(), { name: `縫い合わせ ${label}`, source: { subpath: e.s, from, to }, ...seed });
+          part.stitchLines.push(line);
+        }
+        return line;
+      };
+      const la = lineFor(A, first.e, A.name), lb = lineFor(B, edge, B.name);
+      rememberStitch(la);
+      // Direction: pair start with start unless the pieces are laid out so
+      // that the start of one faces the end of the other.
+      const pa = derivePart(project(), A).stitch.find((s) => s.line.id === la.id), pb = derivePart(project(), B).stitch.find((s) => s.line.id === lb.id);
+      let reverse = false;
+      if (pa?.points?.length && pb?.points?.length) {
+        const d = (u, v) => Math.hypot(u.x - v.x, u.y - v.y);
+        reverse = d(pa.points[0], pb.points.at(-1)) + d(pa.points.at(-1), pb.points[0]) < d(pa.points[0], pb.points[0]) + d(pa.points.at(-1), pb.points.at(-1));
+      }
+      const l = leather();
+      l.joints = l.joints.filter((j) => !((j.a.lineId === la.id && j.b.lineId === lb.id) || (j.a.lineId === lb.id && j.b.lineId === la.id)));
+      l.joints.push(makeJoint(uid(), { name: `${A.name} × ${B.name}`, a: { partId: A.id, lineId: la.id }, b: { partId: B.id, lineId: lb.id }, reverse, master: "a" }));
+      ctx.selectIds([B.itemId]);
+      return { A, B, reverse, seed };
+    }, ({ A, B, reverse, seed }) => `「${A.name}」と「${B.name}」の辺を縫い合わせました（縁から ${seed.offset} mm${reverse ? "・逆向きに対応" : ""}）。穴数を合わせ、長さの差と位置ずれは右パネルの「縫合」に表示します。`);
+  }
   // ---- hole eraser: tap a hole to leave it out, tap its ghost to bring it back.
   let holeHover = null; // { x, y, kind: "hole" | "ghost" }
   function holeTargets() {
@@ -698,7 +747,7 @@ ${line.skipped?.length ? `<p class="note warn">消した穴 ${line.skipped.lengt
       part.stitchLines.length && others.length
         ? `<div class="leather-joint-form"><label class="full-label">このパーツの縫い線<select id="leather-joint-a">${part.stitchLines.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("")}</select></label><label class="full-label">相手の縫い線<select id="leather-joint-b">${others.flatMap((p) => p.stitchLines.map((s) => `<option value="${p.id}|${s.id}">${esc(p.name)} / ${esc(s.name)}</option>`)).join("")}</select></label><label class="check"><input type="checkbox" id="leather-joint-reverse"> 逆向きに対応</label><button class="wide-button" data-leather-action="create-joint" data-part="${part.id}">⟗ 縫合を作成 <small>穴数・位置を一致させる</small></button></div>`
         : `<p class="note">縫合するには、相手のパーツにも縫い線が必要です。</p>`;
-    return rows + form;
+    return rows + `<div class="leather-add"><button data-tool="seam" class="${ctx.tool() === "seam" ? "active" : ""}">⟗ 辺を2つクリックして縫い合わせ</button></div>` + form;
   }
   // The properties section for a selected item that is a part.
   function partPanel(item) {
@@ -796,6 +845,10 @@ ${historyPanel(part, item)}
       for (const t of holeTargets())
         if (t.kind === "ghost") html += `<circle cx="${t.x}" cy="${t.y}" r="${thin * 3}" fill="none" stroke="#b3453b" stroke-width="${thin}" stroke-dasharray="${thin * 1.5} ${thin}" pointer-events="none"/>`;
       if (holeHover) html += `<circle cx="${holeHover.x}" cy="${holeHover.y}" r="${thin * 5}" fill="${holeHover.kind === "hole" ? "#b3453b" : "#2f9e5f"}" fill-opacity="0.25" stroke="${holeHover.kind === "hole" ? "#b3453b" : "#2f9e5f"}" stroke-width="${thin}" pointer-events="none"/>`;
+    }
+    if (seamFirst) {
+      const pts = edgeOutline(seamFirst.e);
+      if (pts.length) html += `<path d="${pathD([pts])}" fill="none" stroke="#d08a2e" stroke-width="${thin * 6}" stroke-linecap="round" pointer-events="none"/>`;
     }
     if (hover) {
       const pts = edgeOutline(hover);
@@ -927,6 +980,10 @@ ${historyPanel(part, item)}
       eraseAt(p, mmPerPx);
       return true;
     }
+    if (tool === "seam") {
+      seamClick(p, mmPerPx);
+      return true;
+    }
     const edge = pickEdge(p, mmPerPx * 12);
     if (!edge) {
       ctx.notify("革パーツの辺の近くをクリックしてください。図形がまだ革パーツでなければ、先に「革パーツにする」を押します。");
@@ -946,7 +1003,7 @@ ${historyPanel(part, item)}
       return changed;
     }
     if (holeHover) holeHover = null;
-    if (!["stitch-edge", "fold-edge"].includes(tool)) {
+    if (!["stitch-edge", "fold-edge", "seam"].includes(tool)) {
       if (hover) {
         hover = null;
         return true;
@@ -962,6 +1019,7 @@ ${historyPanel(part, item)}
     hover = null;
     holeHover = null;
     continuing = null;
+    seamFirst = null;
   }
   function onItemsRemoved(ids) {
     remapItems(leather(), { removed: ids });
