@@ -97,7 +97,7 @@ export function createLeatherUI(ctx) {
   function makePartFrom(item, withStitch) {
     if (!canBePart(item)) throw Error("閉じた図形（長方形・楕円・多角形・パス）だけを革パーツにできます。");
     if (partOf(item.id)) return partOf(item.id);
-    const lines = withStitch ? [makeStitchLine(uid(), { name: "外周", source: { subpath: 0, from: null, to: null }, offset: DEFAULT_OFFSET })] : [];
+    const lines = withStitch ? [makeStitchLine(uid(), { name: "外周", source: { subpath: 0, from: null, to: null }, ...templateLine() })] : [];
     const part = makePart(uid(), item.id, { name: item.name, stitchLines: lines });
     leather().parts.push(part);
     return part;
@@ -110,6 +110,7 @@ export function createLeatherUI(ctx) {
       let made = 0,
         stitched = 0,
         already = 0;
+      const seed = templateLine(items.map((i) => partOf(i.id)).filter(Boolean));
       for (const item of items) {
         const existing = partOf(item.id);
         const part = makePartFrom(item, false);
@@ -121,15 +122,16 @@ export function createLeatherUI(ctx) {
           already++;
           continue;
         }
-        const line = makeStitchLine(uid(), { name: "外周", source: { subpath: 0, from: null, to: null }, offset: DEFAULT_OFFSET });
+        const line = makeStitchLine(uid(), { name: "外周", source: { subpath: 0, from: null, to: null }, ...seed });
         part.stitchLines.push(line);
+        rememberStitch(line);
         stitched++;
         targets.push(...projectLineDown(part, line));
       }
-      return { made, stitched, already, targets };
-    }, ({ made, stitched, already, targets }) =>
+      return { made, stitched, already, targets, seed };
+    }, ({ made, stitched, already, targets, seed }) =>
       withStitch
-        ? `${stitched ? `${stitched} 個のパーツの外周に縫い穴を作りました。` : ""}${already ? `${already} 個は既に縫い線があるのでそのままです（追加するにはパネルの「＋ 全周に縫い線」）。` : ""}${made && !stitched ? `${made} 個を革パーツにしました。` : ""}${projectNotice(targets)}`
+        ? `${stitched ? `${stitched} 個のパーツの外周に縫い穴を作りました（縁から ${seed.offset} mm${seed.pattern ? "・既存の縫い線と同じ設定" : ""}）。` : ""}${already ? `${already} 個は既に縫い線があるのでそのままです（追加するにはパネルの「＋ 全周に縫い線」）。` : ""}${made && !stitched ? `${made} 個を革パーツにしました。` : ""}${projectNotice(targets)}`
         : `${made} 個の図形を革パーツにしました。${items.length - made ? `${items.length - made} 個は既に革パーツです。` : ""}`);
   function addFullStitch() {
     mutate(() => {
@@ -138,8 +140,9 @@ export function createLeatherUI(ctx) {
       const targets = [];
       for (const item of items) {
         const part = makePartFrom(item, false);
-        const line = makeStitchLine(uid(), { name: `外周 ${part.stitchLines.length + 1}`, source: { subpath: 0, from: null, to: null }, offset: DEFAULT_OFFSET });
+        const line = makeStitchLine(uid(), { name: `外周 ${part.stitchLines.length + 1}`, source: { subpath: 0, from: null, to: null }, ...templateLine([part]) });
         part.stitchLines.push(line);
+        rememberStitch(line);
         targets.push(...projectLineDown(part, line));
       }
       return targets;
@@ -164,12 +167,25 @@ export function createLeatherUI(ctx) {
       const inside = st.holes.filter((h) => insidePolygon(h, ring)).length;
       if (inside < Math.max(2, st.holes.length * 0.5)) continue;
       if (other.stitchLines.some((l) => l.source.kind === "projected" && l.source.lineId === line.id)) continue;
+      // Already stitched there (e.g. both pieces carry the same perimeter
+      // line): a projection would just double the holes, so leave it out.
+      const existing = derivePart(p, other).stitch.flatMap((s) => s.holes);
+      const covered = st.holes.filter((h) => existing.some((g) => Math.hypot(g.x - h.x, g.y - h.y) < 1.5)).length;
+      if (existing.length && covered >= st.holes.length * 0.5) {
+        skippedProjection.push(other);
+        continue;
+      }
       other.stitchLines.push(makeStitchLine(uid(), { name: `${part.name} / ${line.name}（投影）`, source: { kind: "projected", partId: part.id, lineId: line.id, placement: relativePlacement(item, d.item) }, offset: 0, pattern: line.pattern }));
       targets.push(other);
     }
     return targets;
   }
-  const projectNotice = (targets) => (targets.length ? ` 下に重なるパーツ「${targets.map((t) => t.name).join("」「")}」にも同じ穴を付けました（上のパーツを動かしても下の穴は残ります）。` : "");
+  let skippedProjection = [];
+  const projectNotice = (targets) => {
+    const skipped = skippedProjection;
+    skippedProjection = [];
+    return (targets.length ? ` 下に重なるパーツ「${targets.map((t) => t.name).join("」「")}」にも同じ穴を付けました（上のパーツを動かしても下の穴は残ります）。` : "") + (skipped.length ? ` 「${skipped.map((t) => t.name).join("」「")}」には既に同じ位置の穴があるため投影しませんでした。` : "");
+  };
   function recapturePlacement(partId, lineId) {
     mutate(() => {
       const part = partById(partId), line = part?.stitchLines.find((l) => l.id === lineId);
@@ -225,6 +241,7 @@ export function createLeatherUI(ctx) {
         const fold = part?.foldLines.find((s) => s.id === entryId);
         const hw = part?.hardware.find((s) => s.id === entryId);
         if (line) {
+          queueMicrotask(() => rememberStitch(line));
           if (key === "name") line.name = String(value).slice(0, 100);
           else if (key === "offset") line.offset = Math.min(LIMITS.offset[1], Math.max(0, Number(value) || 0));
           else if (key === "shape") {
@@ -313,8 +330,9 @@ export function createLeatherUI(ctx) {
       const nth = list.length + 1;
       if (kind === "fold") part.foldLines.push(makeFoldLine(id, { name: `折り線 ${nth}`, source: { subpath: e.s, from, to }, offset: 0 }));
       else {
-        const line = makeStitchLine(id, { name: `縫い線 ${nth}`, source: { subpath: e.s, from, to }, offset: DEFAULT_OFFSET });
+        const line = makeStitchLine(id, { name: `縫い線 ${nth}`, source: { subpath: e.s, from, to }, ...templateLine([part]) });
         part.stitchLines.push(line);
+        rememberStitch(line);
         lastProjection = projectLineDown(part, line);
       }
       continuing = { partId: part.id, lineId: id, kind };
@@ -379,6 +397,17 @@ export function createLeatherUI(ctx) {
     }, (n) => `ミラーコピーを作成しました（${n} パーツ）。元を編集するとコピーに反映されます。コピー側の編集は元に影響しません。`);
   }
   let lastProjection = [];
+  // Settings of the stitch line edited or created most recently: new lines
+  // start from them (and, in a multi-selection, from a line already there).
+  let lastStitch = null; // { offset, pattern }
+  const rememberStitch = (line) => {
+    if (line && line.source.kind !== "projected") lastStitch = { offset: line.offset, pattern: { ...line.pattern } };
+  };
+  const templateLine = (fromParts = []) => {
+    const own = fromParts.flatMap((p) => p.stitchLines).filter((l) => l.source.kind !== "projected");
+    const src = own.at(-1) ?? lastStitch;
+    return src ? { offset: src.offset, pattern: { ...src.pattern } } : { offset: DEFAULT_OFFSET };
+  };
   let hwDrag = null; // { partId, hwId, item, start, origin, moved }
   // Snap a hardware position (item-local mm) to the part's centre lines,
   // other hardware on the part, and the 1 mm grid.
