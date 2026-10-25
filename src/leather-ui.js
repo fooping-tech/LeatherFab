@@ -107,12 +107,30 @@ export function createLeatherUI(ctx) {
       const items = ctx.selectedItems().filter(canBePart);
       if (!items.length) throw Error("閉じた図形を選択してください。");
       const targets = [];
+      let made = 0,
+        stitched = 0,
+        already = 0;
       for (const item of items) {
-        const part = makePartFrom(item, withStitch);
-        if (withStitch) targets.push(...projectLineDown(part, part.stitchLines.at(-1)));
+        const existing = partOf(item.id);
+        const part = makePartFrom(item, false);
+        if (!existing) made++;
+        if (!withStitch) continue;
+        // A part that already has its own stitch line is left alone; one
+        // without (converted earlier, mirrored, template…) gets the outline line.
+        if (part.stitchLines.some((l) => l.source.kind !== "projected")) {
+          already++;
+          continue;
+        }
+        const line = makeStitchLine(uid(), { name: "外周", source: { subpath: 0, from: null, to: null }, offset: DEFAULT_OFFSET });
+        part.stitchLines.push(line);
+        stitched++;
+        targets.push(...projectLineDown(part, line));
       }
-      return { n: items.length, targets };
-    }, ({ n, targets }) => (withStitch ? `${n} 個の図形を革パーツにして、外周に縫い穴を作りました。${projectNotice(targets)}` : `${n} 個の図形を革パーツにしました。`));
+      return { made, stitched, already, targets };
+    }, ({ made, stitched, already, targets }) =>
+      withStitch
+        ? `${stitched ? `${stitched} 個のパーツの外周に縫い穴を作りました。` : ""}${already ? `${already} 個は既に縫い線があるのでそのままです（追加するにはパネルの「＋ 全周に縫い線」）。` : ""}${made && !stitched ? `${made} 個を革パーツにしました。` : ""}${projectNotice(targets)}`
+        : `${made} 個の図形を革パーツにしました。${items.length - made ? `${items.length - made} 個は既に革パーツです。` : ""}`);
   function addFullStitch() {
     mutate(() => {
       const items = ctx.selectedItems().filter(canBePart);
