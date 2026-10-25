@@ -26,11 +26,13 @@ test("stacked loops: the joint starts the partner's holes at the master's first 
   const mk = (id, extra = {}) => makeStitchLine(id, { offset: 3, pattern: { pitch: 4, spacing: "chord", shape: "diamond", angle: 30, ...extra } });
   // The partner's own start sits 7 mm along the loop (as a user might have set it).
   const pa = makePart("pa", "a", { stitchLines: [mk("la")] }), pb = makePart("pb", "b", { stitchLines: [mk("lb", { startOffset: 7 })] });
-  // Without a joint the holes are shifted along the loop (different start / direction).
+  // Even without a joint, overlapping lines share their holes (the partner
+  // snaps onto the first part's holes), so the loops already coincide.
   const loose = deriveProject(project([a, b], { parts: [pa, pb] }));
   const ha = loose.parts[0].stitch[0].holes, hb0 = loose.parts[1].stitch[0].holes;
   const worst0 = Math.max(...ha.map((h) => Math.min(...hb0.map((g) => d2(g, h)))));
-  assert.ok(worst0 > 0.3, `unaligned offset ${worst0}`);
+  assert.ok(worst0 < 0.1, `shared offset ${worst0}`);
+  assert.ok(hb0.some((h) => h.shared));
   // With the joint they coincide hole for hole, slants included.
   const joint = makeJoint("j", { a: { partId: "pa", lineId: "la" }, b: { partId: "pb", lineId: "lb" } });
   const d = deriveProject(project([a, b], { parts: [pa, pb], joints: [joint] }));
