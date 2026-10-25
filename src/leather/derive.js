@@ -323,12 +323,69 @@ export function resolveProjectedLines(project, parts) {
       }
   return parts;
 }
+// Stitch lines of different parts that run along the same path (a pocket
+// on a body, a ring on a disc, stacked pieces) must punch the same holes.
+// Where a later part's line coincides with an earlier part's line, its
+// holes snap to the earlier part's holes (position and slant); a hole that
+// would double up is dropped. Only holes within 0.5 pitch of a partner and
+// within 0.5 mm of the partner's line are affected, so lines that merely
+// cross are left alone.
+export function shareOverlappingHoles(parts) {
+  const lines = [];
+  for (const d of parts) if (d.item) for (const st of d.stitch) if (!st.error && st.points?.length > 1 && st.holes?.length) lines.push({ d, st });
+  for (let j = 1; j < lines.length; j++) {
+    const B = lines[j];
+    const pitchB = B.st.line.pattern?.pitch ?? B.st.sourceLine?.pattern?.pitch ?? 4;
+    for (let i = 0; i < j; i++) {
+      const A = lines[i];
+      if (A.d === B.d) continue;
+      const ba = boundsOf(A.st.points), bb = boundsOf(B.st.points);
+      if (ba.x1 < bb.x0 - 1 || bb.x1 < ba.x0 - 1 || ba.y1 < bb.y0 - 1 || bb.y1 < ba.y0 - 1) continue;
+      const taken = new Set();
+      let moved = 0, dropped = 0;
+      const keep = [];
+      for (const h of B.st.holes) {
+        if (nearestOnPolyline(A.st.points, h).d > 0.5) { keep.push(h); continue; }
+        let best = null;
+        for (const g of A.st.holes) {
+          const dd = Math.hypot(g.x - h.x, g.y - h.y);
+          if (dd <= pitchB * 0.5 && (!best || dd < best.dd)) best = { g, dd };
+        }
+        if (!best) { keep.push(h); continue; }
+        if (taken.has(best.g)) { dropped++; continue; }
+        taken.add(best.g);
+        if (best.dd > 1e-6 || Math.abs(best.g.angle - h.angle) > 1e-6) moved++;
+        Object.assign(h, { x: best.g.x, y: best.g.y, tangent: best.g.tangent, angle: best.g.angle, shared: { partId: A.d.part.id, lineId: A.st.line.id } });
+        h.contour = holeContour(h, B.st.line.pattern ?? B.st.sourceLine?.pattern);
+        keep.push(h);
+      }
+      if (moved || dropped) {
+        B.st.holes = keep;
+        if (B.st.allHoles) B.st.allHoles = B.st.allHoles.filter((h) => keep.includes(h) || !(B.st.skippedHoles ?? []).includes(h) === false);
+        B.st.shared = { partId: A.d.part.id, lineId: A.st.line.id, moved, dropped };
+        B.d.issues.push(issue("info", `縫い線「${B.st.line.name}」: 「${A.d.part.name}」の縫い線と重なる ${moved + dropped} 穴を相手の穴位置に合わせました${dropped ? `（重複 ${dropped} 穴は省略）` : ""}。`, { partId: B.d.part.id, lineId: B.st.line.id }));
+      }
+    }
+  }
+  return parts;
+}
+function boundsOf(pts) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of pts) { if (p.x < x0) x0 = p.x; if (p.y < y0) y0 = p.y; if (p.x > x1) x1 = p.x; if (p.y > y1) y1 = p.y; }
+  return { x0, y0, x1, y1 };
+}
+// The passes that need every part derived first.
+export function finishDerivation(project, parts) {
+  resolveProjectedLines(project, parts);
+  shareOverlappingHoles(parts);
+  return parts;
+}
 // Everything derived for the project. Joints may replace the slave line's
 // holes, so the returned parts already carry the harmonised holes.
 export function deriveProject(project) {
   const leather = project.leather;
   const parts = (leather?.parts ?? []).map((p) => derivePart(project, p));
-  resolveProjectedLines(project, parts);
+  finishDerivation(project, parts);
   const joints = (leather?.joints ?? []).map((j) => deriveJoint(j, parts));
   for (const dj of joints) {
     if (dj.error) continue;

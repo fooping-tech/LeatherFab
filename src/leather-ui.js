@@ -15,7 +15,7 @@ import {
   MATERIALS, LASER_LABELS, LIMITS, OPERATIONS, OPERATION_LABELS, DEFAULT_OFFSET,
 } from "./leather/model.js";
 import { HOLE_SHAPES, SPACINGS, FITS, CORNER_MODES, PITCH_PRESETS, PATTERN_LIMITS, DEFAULT_PATTERN, spiOf } from "./leather/stitch.js";
-import { derivePart, deriveJoint, checkParts, outlinePath, relativePlacement, resolveProjectedLines as deriveProjectForProjected } from "./leather/derive.js";
+import { derivePart, deriveJoint, checkParts, outlinePath, relativePlacement, finishDerivation as deriveProjectForProjected } from "./leather/derive.js";
 import { curve as makeCurve, pointAt as curvePointAt } from "./leather/polyline.js";
 import { operationGeometry, applyKerf, checkManufacturing, exportLeatherSVG, manufacturingSummary, OPERATION_COLORS, OPERATION_ORDER } from "./leather/manufacturing.js";
 import { HARDWARE_PRESETS, HARDWARE_TYPES, presetById } from "./leather/hardware.js";
