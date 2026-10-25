@@ -101,6 +101,10 @@ export function derivePart(project, part) {
   // The ring of the first subpath decides the inside for open runs.
   d.ring = closedRings[0] ?? null;
   for (const line of part.stitchLines) {
+    if (line.source.kind === "projected") {
+      d.stitch.push({ line, projected: true, holes: [], points: [], closed: false, result: null });
+      continue; // resolved in deriveProject once the source part is derived
+    }
     const sub = path[line.source.subpath];
     const ring = sub ? toWorld(pathContours([{ ...sub, closed: true }])[0] ?? [], item) : d.ring;
     const g = resolveLine(item, path, line, ring);
@@ -115,6 +119,7 @@ export function derivePart(project, part) {
     d.stitch.push({ line, points: g.points, closed: g.closed, result, holes });
   }
   for (const fold of part.foldLines) {
+    if (fold.source.kind === "projected") continue;
     const sub = path[fold.source.subpath];
     const ring = sub ? toWorld(pathContours([{ ...sub, closed: true }])[0] ?? [], item) : d.ring;
     const g = resolveLine(item, path, fold, ring);
@@ -192,11 +197,74 @@ export function deriveJoint(joint, derivedParts) {
   }
   return { joint, master: master.st, slave: slave.st, slaveHoles, slaveResult, adjusted, count, lengthDiff, maxDeviation, pairs, issues };
 }
+// Composition of a part item's world transform with a placement given in
+// that item's local frame: the virtual item where the source part sat.
+export function composePlacement(item, placement) {
+  const origin = transform({ x: placement.x, y: placement.y }, item);
+  return { x: origin.x, y: origin.y, rotation: item.rotation + placement.rotation };
+}
+// The placement of `topItem` expressed in `bottomItem`'s local frame.
+export function relativePlacement(bottomItem, topItem) {
+  const local = transform({ x: topItem.x, y: topItem.y }, bottomItem, true);
+  return { x: Number(local.x.toFixed(4)), y: Number(local.y.toFixed(4)), rotation: Number((topItem.rotation - bottomItem.rotation).toFixed(4)) };
+}
+function insideRing(p, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i], b = ring[j];
+    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+// Resolves one projected line of `d` from the (already derived) source part.
+function deriveProjected(project, d, st, parts) {
+  const src = st.line.source;
+  const sp = parts.find((x) => x.part.id === src.partId);
+  const sl = sp?.stitch.find((s) => s.line.id === src.lineId);
+  if (!sp?.item || !sl || sl.error) return `投影元の縫い線が見つからないか、計算できません。`;
+  if (sl.projected) return "投影された縫い線をさらに投影することはできません。";
+  // The source line placed where the source item was when it was captured.
+  const virtual = { ...sp.item, ...composePlacement(d.item, src.placement) };
+  const path = outlinePath(virtual);
+  const sub = path[sl.line.source.subpath];
+  const ring = sub ? toWorld(pathContours([{ ...sub, closed: true }])[0] ?? [], virtual) : null;
+  const g = resolveLine(virtual, path, sl.line, ring);
+  if (g.error) return g.error;
+  const result = placeHoles(g.points, sl.line.pattern, { closed: g.closed });
+  const outer = d.ring;
+  let dropped = 0;
+  const holes = [];
+  for (const h of result.holes) {
+    if (outer && !insideRing(h, outer)) {
+      dropped++;
+      continue;
+    }
+    holes.push({ ...h, contour: holeContour(h, sl.line.pattern) });
+  }
+  Object.assign(st, { points: g.points, closed: g.closed, result, holes, sourcePart: sp.part, sourceLine: sl.line, dropped });
+  if (dropped) d.issues.push(issue("warning", `縫い線「${st.line.name}」: 投影した穴のうち ${dropped} 個がこのパーツの外にあるため省きました。`, { partId: d.part.id, lineId: st.line.id }));
+  if (!holes.length) d.issues.push(issue("warning", `縫い線「${st.line.name}」: 投影した穴がこのパーツに1つもかかっていません。`, { partId: d.part.id, lineId: st.line.id }));
+  return null;
+}
+// Second pass: projected lines, once every source part is derived.
+export function resolveProjectedLines(project, parts) {
+  for (const d of parts)
+    for (const st of d.stitch)
+      if (st.projected && d.item) {
+        const error = deriveProjected(project, d, st, parts);
+        if (error) {
+          st.error = error;
+          d.issues.push(issue("error", `縫い線「${st.line.name}」: ${error}`, { partId: d.part.id, lineId: st.line.id }));
+        }
+      }
+  return parts;
+}
 // Everything derived for the project. Joints may replace the slave line's
 // holes, so the returned parts already carry the harmonised holes.
 export function deriveProject(project) {
   const leather = project.leather;
   const parts = (leather?.parts ?? []).map((p) => derivePart(project, p));
+  resolveProjectedLines(project, parts);
   const joints = (leather?.joints ?? []).map((j) => deriveJoint(j, parts));
   for (const dj of joints) {
     if (dj.error || !dj.adjusted) continue;

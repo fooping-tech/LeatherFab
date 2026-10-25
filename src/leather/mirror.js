@@ -35,7 +35,8 @@ export function mirrorHardware(list, srcItem, copyItem, axis, existing = [], mak
 // the copy's lines and hardware are kept by position so joints stay valid.
 export function mirroredSettings(src, srcItem, copyItem, axis, existing, makeId) {
   return {
-    stitchLines: src.stitchLines.map((line, k) => makeStitchLine(existing?.stitchLines[k]?.id ?? makeId(), { ...structuredClone(line), pattern: { ...line.pattern, flip: !line.pattern.flip } })),
+    // Projected lines are not mirrored (their source sits on another part).
+    stitchLines: src.stitchLines.filter((line) => line.source.kind !== "projected").map((line, k) => makeStitchLine(existing?.stitchLines[k]?.id ?? makeId(), { ...structuredClone(line), pattern: { ...line.pattern, flip: !line.pattern.flip } })),
     foldLines: src.foldLines.map((f, k) => makeFoldLine(existing?.foldLines[k]?.id ?? makeId(), structuredClone(f))),
     hardware: mirrorHardware(src.hardware, srcItem, copyItem, axis, existing?.hardware ?? [], makeId),
   };
@@ -52,7 +53,7 @@ export function createMirrorPart(src, srcItem, copyItem, axis, makeId) {
     mirrorOf: { partId: src.id, axis, itemKey: itemKey(srcItem), partKey: partKey(src) },
   });
   Object.assign(copy, mirroredSettings(src, srcItem, copyItem, axis, null, makeId));
-  const joints = src.stitchLines.map((line, k) =>
+  const joints = src.stitchLines.filter((line) => line.source.kind !== "projected").map((line, k) =>
     makeJoint(makeId(), { name: `${src.name} × ミラー`, a: { partId: src.id, lineId: line.id }, b: { partId: copy.id, lineId: copy.stitchLines[k].id }, reverse: false, master: "a" }),
   );
   return { copy, joints };
