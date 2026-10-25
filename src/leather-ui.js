@@ -16,12 +16,14 @@ import {
 } from "./leather/model.js";
 import { HOLE_SHAPES, SPACINGS, FITS, CORNER_MODES, PITCH_PRESETS, PATTERN_LIMITS, DEFAULT_PATTERN, spiOf } from "./leather/stitch.js";
 import { derivePart, deriveJoint, checkParts, outlinePath, relativePlacement, resolveProjectedLines as deriveProjectForProjected } from "./leather/derive.js";
+import { curve as makeCurve, pointAt as curvePointAt } from "./leather/polyline.js";
 import { operationGeometry, applyKerf, checkManufacturing, exportLeatherSVG, manufacturingSummary, OPERATION_COLORS, OPERATION_ORDER } from "./leather/manufacturing.js";
 import { HARDWARE_PRESETS, HARDWARE_TYPES, presetById } from "./leather/hardware.js";
 import { TEMPLATES } from "./leather/templates.js";
 import { pathContours } from "./path.js";
 
 export const LEATHER_TOOLS = Object.freeze({
+  "hole-erase": { label: "穴を消す", icon: "⊘", hint: "消したい縫い穴をタップ／クリック · 薄く表示された消した穴をタップすると戻る · Escで終了" },
   "stitch-edge": { label: "辺に縫い線", icon: "⋯", hint: "革パーツの辺をクリックして縫い線を追加 · 隣の辺を続けてクリックすると1本につながる · Escで終了" },
   "fold-edge": { label: "辺に折り線", icon: "⌇", hint: "革パーツの辺をクリックして、その辺に平行な折り線（SCORE）を追加 · Escで終了" },
   hardware: { label: "金具", icon: "◎", hint: "革パーツの上をクリックして金具（穴）を配置 · Escで終了" },
@@ -53,10 +55,13 @@ export function createLeatherUI(ctx) {
     resolveProjected(parts);
     const joints = l.joints.map((j) => deriveJoint(j, parts));
     for (const dj of joints) {
-      if (dj.error || !dj.adjusted) continue;
-      dj.slave.holes = dj.slaveHoles;
-      dj.slave.result = dj.slaveResult;
-      dj.slave.joined = dj.joint.id;
+      if (dj.error) continue;
+      if (dj.masterHoles && dj.masterHoles.length !== dj.master.holes.length) dj.master.holes = dj.masterHoles;
+      if (dj.adjusted || (dj.slaveHoles && dj.slaveHoles.length !== dj.slave.holes.length)) {
+        dj.slave.holes = dj.slaveHoles;
+        dj.slave.result = dj.slaveResult;
+        if (dj.adjusted) dj.slave.joined = dj.joint.id;
+      }
     }
     return { parts, joints, issues: [...parts.flatMap((d) => d.issues), ...joints.flatMap((j) => j.issues)] };
   }
@@ -514,6 +519,52 @@ ${rows}
     lastHistoryErrors.clear();
     for (const e of errors) lastHistoryErrors.set(e.featureId, e.message);
   }
+  // ---- hole eraser: tap a hole to leave it out, tap its ghost to bring it back.
+  let holeHover = null; // { x, y, kind: "hole" | "ghost" }
+  function holeTargets() {
+    const out = [];
+    for (const dp of derived().parts) {
+      if (!dp.item) continue;
+      for (const st of dp.stitch) {
+        if (st.error || !st.result) continue;
+        for (const h of st.holes) out.push({ kind: "hole", x: h.x, y: h.y, part: dp.part, st, u: st.result.length ? h.s / st.result.length : 0 });
+        const c = st.points?.length > 1 ? makeCurve(st.points, st.closed) : null;
+        for (const k of st.line.skipped ?? []) {
+          const p = c ? curvePointAt(c, k.u * c.length) : null;
+          if (p) out.push({ kind: "ghost", x: p.x, y: p.y, part: dp.part, st, skip: k });
+        }
+      }
+    }
+    return out;
+  }
+  function nearestHole(p, radius) {
+    let best = null;
+    for (const t of holeTargets()) {
+      const d = Math.hypot(t.x - p.x, t.y - p.y);
+      if (d <= radius && (!best || d < best.d)) best = { ...t, d };
+    }
+    return best;
+  }
+  function eraseAt(p, mmPerPx) {
+    const t = nearestHole(p, Math.max(mmPerPx * 14, 1.5));
+    if (!t) return ctx.notify("縫い穴の上をタップしてください。");
+    mutate(() => {
+      // derived() hands out clones; edit the real part.
+      const line = partById(t.part.id)?.stitchLines.find((l) => l.id === t.st.line.id);
+      if (!line) return;
+      if (t.kind === "hole") line.skipped = [...(line.skipped ?? []), { u: Number(t.u.toFixed(6)) }];
+      else line.skipped = (line.skipped ?? []).filter((k) => k !== t.skip && Math.abs(k.u - t.skip.u) > 1e-9);
+      if (line.skipped && !line.skipped.length) delete line.skipped;
+      ctx.selectIds([t.part.itemId]);
+      return t.kind;
+    }, (k) => (k === "hole" ? "穴を1つ消しました。薄い印をタップすると戻せます。縫合相手の対応する穴も一緒に省きます。" : "穴を戻しました。"));
+  }
+  function restoreAll(partId, lineId) {
+    mutate(() => {
+      const line = partById(partId)?.stitchLines.find((l) => l.id === lineId);
+      if (line) delete line.skipped;
+    }, "消した穴をすべて戻しました。");
+  }
   // ---- joints
   function createJoint(aPart, aLine, bPart, bLine, reverse) {
     mutate((l) => {
@@ -551,13 +602,13 @@ ${rows}
     if (!st || st.error) return `<p class="leather-error">${esc(st?.error ?? "計算できません")}</p>`;
     const r = st.result;
     const dev = r.pitch.target ? Math.abs(r.pitch.mean - r.pitch.target) / r.pitch.target : 0;
-    return `<dl class="measure leather-stats"><dt>穴数</dt><dd><b>${st.holes.length}</b>${st.joined ? " · 縫合で穴数を合わせています" : ""}</dd><dt>実ピッチ（弦長）</dt><dd class="${dev > st.line.pattern.maxDeviation ? "warn" : ""}">${num(r.pitch.mean)} mm（${num(r.pitch.min)}〜${num(r.pitch.max)}）· ${num(spiOf(r.pitch.mean || st.line.pattern.pitch), 1)} SPI</dd><dt>縫い線の長さ</dt><dd>${num(r.length, 1)} mm${r.closed ? "（閉）" : ""} · 区間 ${r.spans.length} · 角 ${r.corners ?? 0}</dd></dl>${r.warnings.length ? `<ul class="leather-warnings">${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}`;
+    return `<dl class="measure leather-stats"><dt>穴数</dt><dd><b>${st.holes.length}</b>${st.skippedHoles?.length ? ` （消した穴 ${st.skippedHoles.length}）` : ""}${st.joined ? " · 縫合で穴数を合わせています" : ""}</dd><dt>実ピッチ（弦長）</dt><dd class="${dev > st.line.pattern.maxDeviation ? "warn" : ""}">${num(r.pitch.mean)} mm（${num(r.pitch.min)}〜${num(r.pitch.max)}）· ${num(spiOf(r.pitch.mean || st.line.pattern.pitch), 1)} SPI</dd><dt>縫い線の長さ</dt><dd>${num(r.length, 1)} mm${r.closed ? "（閉）" : ""} · 区間 ${r.spans.length} · 角 ${r.corners ?? 0}</dd></dl>${r.warnings.length ? `<ul class="leather-warnings">${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}`;
   }
   function stitchBlock(part, line, st) {
     const f = (key) => `stitch|${part.id}|${line.id}|${key}`;
     if (line.source.kind === "projected") {
       const src = partById(line.source.partId);
-      return `<details class="leather-line projected" open><summary><span>${esc(line.name)}</span><small>投影 · ${st?.holes.length ?? 0} 穴</small></summary><p class="note">⤓ 上のパーツ「${esc(src?.name ?? "?")}」の縫い線の穴を、重ねたときの位置でこのパーツに写しています。ピッチ・穴の形は元の縫い線で変更します。上のパーツを動かしても、この穴の位置は変わりません。</p>${st?.error ? `<p class="leather-error">${esc(st.error)}</p>` : ""}${st?.dropped ? `<p class="note warn">このパーツの外にある ${st.dropped} 個の穴は省いています。</p>` : ""}<div class="leather-add"><button data-leather-action="recapture" data-part="${part.id}" data-entry="${line.id}">今の重なり位置で取り直す</button></div><button class="text-link danger" data-leather-action="remove-entry" data-part="${part.id}" data-entry="${line.id}">この投影を削除</button></details>`;
+      return `<details class="leather-line projected" open><summary><span>${esc(line.name)}</span><small>投影 · ${st?.holes.length ?? 0} 穴</small></summary><p class="note">⤓ 上のパーツ「${esc(src?.name ?? "?")}」の縫い線の穴を、重ねたときの位置でこのパーツに写しています。ピッチ・穴の形は元の縫い線で変更します。上のパーツを動かしても、この穴の位置は変わりません。</p>${st?.error ? `<p class="leather-error">${esc(st.error)}</p>` : ""}${st?.dropped ? `<p class="note warn">このパーツの外にある ${st.dropped} 個の穴は省いています。</p>` : ""}${line.skipped?.length ? `<p class="note warn">消した穴 ${line.skipped.length} 個 <button class="text-link" data-leather-action="restore-holes" data-part="${part.id}" data-entry="${line.id}">すべて戻す</button></p>` : ""}<div class="leather-add"><button data-leather-action="recapture" data-part="${part.id}" data-entry="${line.id}">今の重なり位置で取り直す</button><button data-tool="hole-erase" class="${ctx.tool() === "hole-erase" ? "active" : ""}">⊘ 穴を消す／戻す</button></div><button class="text-link danger" data-leather-action="remove-entry" data-part="${part.id}" data-entry="${line.id}">この投影を削除</button></details>`;
     }
     const p = line.pattern;
     return `<details class="leather-line" open><summary><span>${esc(line.name)}</span><small>${esc(sourceLabel(line.source))} · ${st?.holes.length ?? 0} 穴</small></summary>
@@ -569,6 +620,8 @@ ${rows}
 <h5>角と端</h5><div class="fields"><label>角の処理${sel(f("corner"), CORNER_MODES, p.corner)}</label>${numField(f("cornerAngle"), "角とみなす角度", p.cornerAngle, 5, PATTERN_LIMITS.cornerAngle, "°")}${line.source.from === null || line.source.from === line.source.to ? numField(f("startOffset"), "開始位置", p.startOffset, 0.5, [-1000, 1000]) : numField(f("startMargin"), "始端の余白", p.startMargin, 0.5, PATTERN_LIMITS.startMargin) + numField(f("endMargin"), "終端の余白", p.endMargin, 0.5, PATTERN_LIMITS.endMargin)}</div>
 <div class="leather-checks">${check(f("reverse"), "逆目打ち（進行方向を反転）", p.reverse)}${check(f("flip"), "ミラー（裏から加工・穴の傾きを反転）", p.flip)}</div>
 <div data-leather-stats="${line.id}">${statsHTML(st)}</div>
+${line.skipped?.length ? `<p class="note warn">消した穴 ${line.skipped.length} 個（「穴を消す」ツールで薄い印をタップすると個別に戻せます） <button class="text-link" data-leather-action="restore-holes" data-part="${part.id}" data-entry="${line.id}">すべて戻す</button></p>` : ""}
+<div class="leather-add"><button data-tool="hole-erase" class="${ctx.tool() === "hole-erase" ? "active" : ""}">⊘ 穴を1つずつ消す／戻す</button></div>
 <button class="text-link danger" data-leather-action="remove-entry" data-part="${part.id}" data-entry="${line.id}">この縫い線を削除</button></details>`;
   }
   function foldBlock(part, fold, df) {
@@ -692,6 +745,11 @@ ${historyPanel(part, item)}
       const pr = dj.pairs[0];
       if (pr) html += `<path d="M${pr.a.x} ${pr.a.y} L${pr.b.x} ${pr.b.y}" stroke="#d08a2e" stroke-width="${thin}" stroke-dasharray="${thin * 2} ${thin * 2}" fill="none" pointer-events="none"/>`;
     }
+    if (ctx.tool() === "hole-erase") {
+      for (const t of holeTargets())
+        if (t.kind === "ghost") html += `<circle cx="${t.x}" cy="${t.y}" r="${thin * 3}" fill="none" stroke="#b3453b" stroke-width="${thin}" stroke-dasharray="${thin * 1.5} ${thin}" pointer-events="none"/>`;
+      if (holeHover) html += `<circle cx="${holeHover.x}" cy="${holeHover.y}" r="${thin * 5}" fill="${holeHover.kind === "hole" ? "#b3453b" : "#2f9e5f"}" fill-opacity="0.25" stroke="${holeHover.kind === "hole" ? "#b3453b" : "#2f9e5f"}" stroke-width="${thin}" pointer-events="none"/>`;
+    }
     if (hover) {
       const pts = edgeOutline(hover);
       if (pts.length) html += `<path d="${pathD([pts])}" fill="none" stroke="#e08a2e" stroke-opacity="0.8" stroke-width="${thin * 6}" stroke-linecap="round" pointer-events="none"/>`;
@@ -756,6 +814,7 @@ ${historyPanel(part, item)}
     else if (a === "detach-mirror") mutate((l) => detachMirror(l, t.dataset.part), "ミラーのリンクを解除しました。以後は独立したパーツです。");
     else if (a.startsWith("history-")) historyAction(a, t.dataset.part, t.dataset.feature);
     else if (a === "recapture") recapturePlacement(t.dataset.part, t.dataset.entry);
+    else if (a === "restore-holes") restoreAll(t.dataset.part, t.dataset.entry);
     else if (a === "boolean-union") applyBooleanLeather("union");
     else if (a === "boolean-difference") applyBooleanLeather("difference");
     else if (a === "convert") convertSelection(false);
@@ -817,6 +876,10 @@ ${historyPanel(part, item)}
       addHardwareAt(p);
       return true;
     }
+    if (tool === "hole-erase") {
+      eraseAt(p, mmPerPx);
+      return true;
+    }
     const edge = pickEdge(p, mmPerPx * 12);
     if (!edge) {
       ctx.notify("革パーツの辺の近くをクリックしてください。図形がまだ革パーツでなければ、先に「革パーツにする」を押します。");
@@ -829,6 +892,13 @@ ${historyPanel(part, item)}
   function pointerMove(p, mmPerPx) {
     if (hwDrag) return hardwarePointerMove(p, mmPerPx);
     const tool = ctx.tool();
+    if (tool === "hole-erase") {
+      const t = nearestHole(p, Math.max(mmPerPx * 14, 1.5));
+      const changed = (t?.x !== holeHover?.x) || t?.y !== holeHover?.y;
+      holeHover = t ? { x: t.x, y: t.y, kind: t.kind } : null;
+      return changed;
+    }
+    if (holeHover) holeHover = null;
     if (!["stitch-edge", "fold-edge"].includes(tool)) {
       if (hover) {
         hover = null;
@@ -843,6 +913,7 @@ ${historyPanel(part, item)}
   }
   function cancel() {
     hover = null;
+    holeHover = null;
     continuing = null;
   }
   function onItemsRemoved(ids) {

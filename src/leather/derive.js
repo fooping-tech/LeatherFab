@@ -14,6 +14,29 @@ import { presetById, hardwareContours } from "./hardware.js";
 import { MATERIALS } from "./model.js";
 
 const issue = (level, message, extra = {}) => ({ level, message, ...extra });
+// Applies a line's `skipped` list to placed holes: for each recorded
+// position the nearest hole (within 0.6 pitch) is marked skipped. Returns
+// { holes (kept), skippedHoles, orphans (skips that matched nothing) }.
+export function applySkips(holes, line, result) {
+  const L = result?.length ?? 0;
+  const skips = line.skipped ?? [];
+  if (!skips.length || !holes.length || !(L > 0)) return { holes, skippedHoles: [], orphans: [] };
+  const pitch = line.pattern?.pitch ?? 4;
+  const taken = new Set();
+  const orphans = [];
+  for (const k of skips) {
+    let best = null;
+    for (const h of holes) {
+      if (taken.has(h)) continue;
+      let d = Math.abs(h.s / L - k.u);
+      if (result.closed) d = Math.min(d, 1 - d);
+      if (!best || d < best.d) best = { d, h };
+    }
+    if (best && best.d * L <= pitch * 0.6) taken.add(best.h);
+    else orphans.push(k);
+  }
+  return { holes: holes.filter((h) => !taken.has(h)), skippedHoles: holes.filter((h) => taken.has(h)), orphans };
+}
 // The editable path of the outline item in item-local coordinates.
 export const outlinePath = (item) => workingPathOf(item);
 // Flattened local polyline of the source run: {points, closed} or an error.
@@ -114,9 +137,11 @@ export function derivePart(project, part) {
       continue;
     }
     const result = placeHoles(g.points, line.pattern, { closed: g.closed });
-    const holes = result.holes.map((h) => ({ ...h, contour: holeContour(h, line.pattern) }));
+    const allHoles = result.holes.map((h) => ({ ...h, contour: holeContour(h, line.pattern) }));
+    const sk = applySkips(allHoles, line, result);
     for (const w of result.warnings) d.issues.push(issue("warning", `縫い線「${line.name}」: ${w}`, { partId: part.id, lineId: line.id }));
-    d.stitch.push({ line, points: g.points, closed: g.closed, result, holes });
+    if (sk.orphans.length) d.issues.push(issue("warning", `縫い線「${line.name}」: 消した穴の記録 ${sk.orphans.length} 件が現在の穴と対応しません（ピッチや形が大きく変わりました）。`, { partId: part.id, lineId: line.id }));
+    d.stitch.push({ line, points: g.points, closed: g.closed, result, holes: sk.holes, allHoles, skippedHoles: sk.skippedHoles });
   }
   for (const fold of part.foldLines) {
     if (fold.source.kind === "projected") continue;
@@ -162,9 +187,12 @@ export function deriveJoint(joint, derivedParts) {
     B = find(joint.b);
   if (!A || !B) return { joint, error: "縫合する縫い線が見つからないか、計算できません。", issues: [issue("error", `縫合「${joint.name}」: 縫い線が見つかりません。`, { jointId: joint.id })] };
   const [master, slave] = joint.master === "b" ? [B, A] : [A, B];
-  const count = master.st.holes.length;
+  // Pair on the full placements; holes erased on either side drop out of
+  // both so the pieces still match hole for hole.
+  const masterAll = master.st.allHoles ?? master.st.holes;
+  const count = masterAll.length;
   let slaveResult = slave.st.result,
-    slaveHoles = slave.st.holes,
+    slaveHoles = slave.st.allHoles ?? slave.st.holes,
     adjusted = false;
   if (slaveHoles.length !== count && count > 0) {
     slaveResult = placeHoles(slave.st.points, { ...slave.st.line.pattern, fit: "count", count }, { closed: slave.st.closed });
@@ -182,20 +210,31 @@ export function deriveJoint(joint, derivedParts) {
   // partner's actual position and the master's normalised position.
   const pairs = [];
   let maxDeviation = 0;
+  let masterKept = master.st.holes,
+    slaveKept = slaveHoles;
   if (slaveHoles.length === count && count > 0) {
     const slaveCurve = curve(slave.st.points, slave.st.closed);
+    const masterSkipped = new Set((master.st.skippedHoles ?? []).map((h) => h.index));
+    const slaveSkipped = new Set(applySkips(slaveHoles, slave.st.line, slaveResult).skippedHoles.map((h) => h.index));
+    const keepA = new Set(), keepB = new Set();
     for (let i = 0; i < count; i++) {
       const j = joint.reverse ? count - 1 - i : i;
-      const u = lenA > 0 ? master.st.holes[i].s / lenA : 0;
+      const u = lenA > 0 ? masterAll[i].s / lenA : 0;
       const expectedS = joint.reverse ? lenB * (1 - u) : lenB * u;
       let dev = Math.abs(slaveHoles[j].s - expectedS);
       if (slave.st.closed) dev = Math.min(dev, lenB - dev);
       maxDeviation = Math.max(maxDeviation, dev);
-      pairs.push({ a: master.st.holes[i], b: slaveHoles[j], deviation: dev, expected: pointAt(slaveCurve, expectedS) });
+      const erased = masterSkipped.has(masterAll[i].index) || slaveSkipped.has(slaveHoles[j].index);
+      if (erased) continue;
+      keepA.add(masterAll[i]);
+      keepB.add(slaveHoles[j]);
+      pairs.push({ a: masterAll[i], b: slaveHoles[j], deviation: dev, expected: pointAt(slaveCurve, expectedS) });
     }
+    masterKept = masterAll.filter((h) => keepA.has(h));
+    slaveKept = slaveHoles.filter((h) => keepB.has(h));
     if (maxDeviation > 1) issues.push(issue("warning", `縫合「${joint.name}」: 穴位置の最大ずれ ${maxDeviation.toFixed(2)} mm（縫い合わせると革がよれる可能性があります）。`, { jointId: joint.id }));
   }
-  return { joint, master: master.st, slave: slave.st, slaveHoles, slaveResult, adjusted, count, lengthDiff, maxDeviation, pairs, issues };
+  return { joint, master: master.st, slave: slave.st, masterHoles: masterKept, slaveHoles: slaveKept, slaveResult, adjusted, count, lengthDiff, maxDeviation, pairs, issues };
 }
 // Composition of a part item's world transform with a placement given in
 // that item's local frame: the virtual item where the source part sat.
@@ -241,7 +280,8 @@ function deriveProjected(project, d, st, parts) {
     }
     holes.push({ ...h, contour: holeContour(h, sl.line.pattern) });
   }
-  Object.assign(st, { points: g.points, closed: g.closed, result, holes, sourcePart: sp.part, sourceLine: sl.line, dropped });
+  const sk = applySkips(holes, st.line, result);
+  Object.assign(st, { points: g.points, closed: g.closed, result, holes: sk.holes, allHoles: holes, skippedHoles: sk.skippedHoles, sourcePart: sp.part, sourceLine: sl.line, dropped });
   if (dropped) d.issues.push(issue("warning", `縫い線「${st.line.name}」: 投影した穴のうち ${dropped} 個がこのパーツの外にあるため省きました。`, { partId: d.part.id, lineId: st.line.id }));
   if (!holes.length) d.issues.push(issue("warning", `縫い線「${st.line.name}」: 投影した穴がこのパーツに1つもかかっていません。`, { partId: d.part.id, lineId: st.line.id }));
   return null;
@@ -267,10 +307,13 @@ export function deriveProject(project) {
   resolveProjectedLines(project, parts);
   const joints = (leather?.joints ?? []).map((j) => deriveJoint(j, parts));
   for (const dj of joints) {
-    if (dj.error || !dj.adjusted) continue;
-    dj.slave.holes = dj.slaveHoles;
-    dj.slave.result = dj.slaveResult;
-    dj.slave.joined = dj.joint.id;
+    if (dj.error) continue;
+    if (dj.masterHoles && dj.masterHoles.length !== dj.master.holes.length) dj.master.holes = dj.masterHoles;
+    if (dj.adjusted || (dj.slaveHoles && dj.slaveHoles.length !== dj.slave.holes.length)) {
+      dj.slave.holes = dj.slaveHoles;
+      dj.slave.result = dj.slaveResult;
+      if (dj.adjusted) dj.slave.joined = dj.joint.id;
+    }
   }
   const issues = [...parts.flatMap((d) => d.issues), ...joints.flatMap((j) => j.issues)];
   return { parts, joints, issues };
