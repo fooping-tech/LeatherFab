@@ -247,7 +247,9 @@ test("fillet: 90°, acute and obtuse corners get tangent points at r/tan(θ/2) a
   assert.equal(fo[0].nodes.length, 4);
   assert.throws(() => filletCorner(acute, 0, 0, 1), /端のノード/);
   const curved = [{ closed: false, nodes: [{ x: 0, y: 0, out: { x: 3, y: 0 } }, { x: 10, y: 0, in: { x: 7, y: 0 } }, { x: 10, y: 10 }] }];
-  assert.throws(() => filletCorner(curved, 0, 1, 1), /直線どうし/);
+  // LeatherFab: corners with a curve are rounded by the general tangent-arc
+  // fillet (leather/fillet.js) instead of being rejected.
+  assert.ok(filletCorner(curved, 0, 1, 1)[0].nodes.length > curved[0].nodes.length);
 });
 
 test("chamfer: equal-distance 90° corner; too large a distance throws; corner tools on items and on two lines", () => {

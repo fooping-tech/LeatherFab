@@ -1,8 +1,32 @@
 // Polyline helpers for the leather layer (CAD Geometry Core). Everything is
 // in millimetres. A polyline is an array of {x, y}; a closed one repeats its
 // first point at the end (the TypeFab contour convention).
-import { offsetClosed, offsetOpen } from "../cad.js";
+import ClipperLib from "clipper-lib";
+import { offsetOpen } from "../cad.js";
 import { signedArea } from "../polygon.js";
+
+// Inward offset of closed rings with Clipper. The arc tolerance is 0.002 mm
+// (ten times finer than the cut flattening): the inset ring is where hole
+// tangents are measured, and coarse 13° facets on a 3 mm concave arc would
+// tilt slanted holes by a few degrees and break mirror symmetry.
+const SCALE = 10000,
+  ARC_TOLERANCE = 0.002;
+export function offsetClosed(contours, distance) {
+  const paths = ClipperLib.Clipper.SimplifyPolygons(
+    contours.map((c) => c.slice(0, -1).map((p) => ({ X: Math.round(p.x * SCALE), Y: Math.round(p.y * SCALE) }))),
+    ClipperLib.PolyFillType.pftNonZero,
+  );
+  const co = new ClipperLib.ClipperOffset(2, ARC_TOLERANCE * SCALE);
+  co.AddPaths(paths, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
+  const out = new ClipperLib.Paths();
+  co.Execute(out, distance * SCALE);
+  return out
+    .filter((c) => c.length >= 3)
+    .map((c) => {
+      const pts = c.map((p) => ({ x: p.X / SCALE, y: p.Y / SCALE }));
+      return [...pts, { ...pts[0] }];
+    });
+}
 
 export const P = (x, y) => ({ x, y });
 export const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -125,7 +149,7 @@ export const orientation = (points) => (signedArea(points) < 0 ? 1 : -1);
 export function offsetInward(points, distance, { closed = isClosedPolyline(points), inside = null, ring = null } = {}) {
   if (!(Math.abs(distance) > 1e-9)) return dedupe(points);
   if (closed) {
-    const rings = offsetClosed([points], -Math.abs(distance), "round");
+    const rings = offsetClosed([points], -Math.abs(distance));
     if (!rings.length) return null;
     let best = rings[0],
       area = Math.abs(signedArea(best));
