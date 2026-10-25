@@ -2315,3 +2315,32 @@ dialog .primary {
 @media (max-width: 860px) {
   .leather-add button { flex-basis: 100%; }
 }
+
+/* Floating boolean bar shown under the canvas while 2+ shapes are selected. */
+.selection-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 86px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 12px;
+  background: #fffdf9;
+  border: 1px solid #e3d6c6;
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(60, 40, 20, 0.16);
+  font-size: 11px;
+  color: #7a6a5c;
+  z-index: 5;
+  white-space: nowrap;
+}
+.selection-bar[hidden] { display: none; }
+.selection-bar span { margin-right: 4px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.selection-bar button { padding: 7px 11px; border: 1px solid #e3d6c6; background: #fff; font-size: 11px; color: #2b2520; }
+.selection-bar button:hover { background: #f6ebdd; border-color: #b57747; }
+.selection-bar #selection-bar-stitch { color: #8a5a30; }
+@media (max-width: 860px) {
+  .selection-bar { bottom: 70px; gap: 4px; padding: 5px 6px; max-width: calc(100% - 16px); overflow-x: auto; }
+  .selection-bar span { display: none; }
+}
