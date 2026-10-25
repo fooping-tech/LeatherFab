@@ -1020,6 +1020,7 @@ const leather = createLeatherUI({
   render,
   renderCanvas: () => renderCanvas(),
   notify,
+  applyBoolean: (op) => applyBoolean(op),
 });
 $("#app").innerHTML = `
 <header><a class="brand" href="../"><span class="brand-mark">l<span>f</span></span><span class="brand-name">LeatherFab</span><span class="beta">ALPHA</span></a><div class="document-title"><span id="project-name"></span><small id="save-status">ローカルプロジェクト</small></div><div class="mobile-actions"><button data-mobile-action="undo" title="元に戻す" aria-label="元に戻す">↶</button><button data-mobile-action="redo" title="やり直す" aria-label="やり直す">↷</button><button id="more-button" title="メニュー" aria-label="メニュー" aria-haspopup="menu">⋯</button><button id="mobile-help" class="help-round" aria-label="使い方">?</button></div><div class="header-actions"><button id="new-project" title="新規プロジェクト">新規</button><button id="open-project" title="TypeFabプロジェクト（.json）を開く、またはSVG・DXFの図形を読み込む（キャンバスへのドロップも可）">開く</button><button id="import-button" title="SVG・DXFの図形、PNG・JPEG・GIFの画像（輪郭をトレース）を加工エリア（ハンコでは印面）の中央に読み込む（キャンバスへのドロップも可）">読み込み</button><button id="save-project">保存</button><button id="export" class="primary">↗ <span class="long">SVGを書き出す</span><span class="short">SVG</span></button></div></header>
@@ -1643,6 +1644,8 @@ function render({ properties = true } = {}) {
   $("#edit-path").classList.toggle("active", Boolean(pathEdit));
   $("#delete").disabled = $("#duplicate").disabled = !selectedItem();
   $("#leather-convert").disabled = !leather.anyConvertible();
+  $("#leather-mirror").disabled = !leather.anyPartSelected();
+  $("#leather-union").disabled = $("#leather-difference").disabled = selectedItems().length < 2;
   document.querySelectorAll("[data-fabrication]").forEach((b) => {
     const on = b.dataset.fabrication === fabricationMode(project);
     b.classList.toggle("active", on);
@@ -2242,6 +2245,8 @@ function cadConfirm() {
   if (project.items.length + copies.length > 2000) return notify("アイテム数の上限（2000）を超えます。");
   checkpoint();
   project.items.push(...copies);
+  // LeatherFab: a mirrored part gets a mirrored part (holes flipped, joined).
+  if (cad.tool === "mirror") leather.mirrorPartsFor(selectionWithBridges(), copies);
   multi = copies.filter((i) => i.type !== "bridge").map((i) => i.id);
   selected = multi.at(-1) || null;
   const label = CAD_TOOLS[cad.tool].label;
@@ -3248,7 +3253,7 @@ function applyBoolean(operation) {
         b.layerId = result.layerId;
       }
     project.items.push(result);
-    leather.onItemsReplaced(Object.fromEntries(ids.map((id) => [id, result.id])));
+    leather.onItemsReplaced(Object.fromEntries(ids.map((id) => [id, result.id])), { newShape: true });
     selectItem(result.id);
     preview = false;
     commit();
@@ -3585,6 +3590,9 @@ document.addEventListener("click", (e) => {
   const mode = e.target.closest("[data-fabrication]");
   if (mode) setFabrication(mode.dataset.fabrication);
   if (e.target.closest("#leather-convert")) return leather.convertSelection(true);
+  if (e.target.closest("#leather-mirror")) return leather.mirrorSelection();
+  if (e.target.closest("#leather-union")) return applyBoolean("union");
+  if (e.target.closest("#leather-difference")) return applyBoolean("difference");
   leather.handleClick(e);
 });
 $("#properties").addEventListener("input", (e) => leather.handleInput(e));
@@ -4212,7 +4220,7 @@ $("#canvas").addEventListener("pointermove", (e) => {
     Math.hypot(e.clientX - longPressAt.x, e.clientY - longPressAt.y) > 8
   )
     cancelLongPress();
-  if (!drag && leather.isLeatherTool(tool)) {
+  if (!drag && (leather.isLeatherTool(tool) || leather.dragging())) {
     if (leather.pointerMove(canvasPoint(e), 1 / $("#canvas").getScreenCTM().a)) renderCanvas();
     return;
   }
@@ -4393,6 +4401,7 @@ $("#canvas").addEventListener("pointermove", (e) => {
 for (const event of ["pointerup", "pointercancel"])
   $("#canvas").addEventListener(event, (e) => {
     cancelLongPress();
+    if (leather.hardwarePointerUp()) return;
     if (menuGuard === Infinity) menuGuard = performance.now() + 500;
     if (drag) drag.label = null;
     if (drag?.kind === "draw") {

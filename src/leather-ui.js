@@ -3,7 +3,8 @@
 // (toolbar, properties, canvas overlay, checks, export, pointer events).
 // Geometry and the model stay in src/leather/*; this file only renders and
 // edits project.leather.
-import { transform, worldContours } from "./geometry.js";
+import { transform, worldContours, bounds } from "./geometry.js";
+import { mirrorItems, axisThrough } from "./cad.js";
 import { nearestSegment } from "./path.js";
 import { isClosed } from "./polygon.js";
 import {
@@ -256,6 +257,100 @@ export function createLeatherUI(ctx) {
     return inside;
   }
   let lastPreset = "snap-spring-m";
+  // ---- mirror: a mirrored copy of a part keeps every stitch line, fold line
+  // and hardware (in item-local coordinates they are the same; the item's
+  // geometry is mirrored), with hole slants flipped so the holes of the two
+  // pieces are mirror images. The copy is independent afterwards — edit one
+  // side only — and a joint keeps the hole counts equal.
+  function mirrorPartsFor(oldItems, newItems) {
+    const l = leather();
+    let made = 0;
+    oldItems.forEach((item, k) => {
+      const src = partOf(item.id),
+        copyItem = newItems[k];
+      if (!src || !copyItem || partOf(copyItem.id)) return;
+      const copy = makePart(uid(), copyItem.id, {
+        ...structuredClone(src),
+        name: `${src.name} ミラー`,
+        side: src.side === "front" ? "back" : "front",
+      });
+      copy.stitchLines = src.stitchLines.map((line) => makeStitchLine(uid(), { ...structuredClone(line), pattern: { ...line.pattern, flip: !line.pattern.flip } }));
+      copy.foldLines = src.foldLines.map((f) => makeFoldLine(uid(), structuredClone(f)));
+      copy.hardware = src.hardware.map((h) => makeHardware(uid(), structuredClone(h)));
+      l.parts.push(copy);
+      src.stitchLines.forEach((line, n) => {
+        l.joints.push(makeJoint(uid(), { name: `${src.name} × ミラー`, a: { partId: src.id, lineId: line.id }, b: { partId: copy.id, lineId: copy.stitchLines[n].id }, reverse: false, master: "a" }));
+      });
+      made++;
+    });
+    return made;
+  }
+  // Mirror copy of the selected parts about a vertical axis just right of them.
+  function mirrorSelection() {
+    mutate(() => {
+      const items = ctx.selectedItems().filter((i) => partOf(i.id));
+      if (!items.length) throw Error("革パーツを選択してください。");
+      const box = bounds(items.flatMap((i) => worldContours(i)));
+      const gap = 10;
+      const [a, b] = axisThrough({ x: box.x + box.w + gap / 2, y: box.y + box.h / 2 }, "vertical");
+      const copies = mirrorItems(items, a, b, uid);
+      project().items.push(...copies);
+      const made = mirrorPartsFor(items, copies);
+      ctx.selectIds(copies.map((i) => i.id));
+      return made;
+    }, (n) => `ミラーコピーを作成しました（${n} パーツ）。縫い穴は左右対称（穴の傾きも反転）で、縫合により穴数を合わせます。ミラー側だけを編集できます。`);
+  }
+  let hwDrag = null; // { partId, hwId, item, start, origin, moved }
+  // Snap a hardware position (item-local mm) to the part's centre lines,
+  // other hardware on the part, and the 1 mm grid.
+  function snapHardware(part, item, hw, local, mmPerPx) {
+    const tol = mmPerPx * 8;
+    const box = bounds(worldContours(item).map((ring) => ring.map((q) => transform(q, item, true))));
+    const xs = [box.x + box.w / 2], ys = [box.y + box.h / 2];
+    for (const other of part.hardware) if (other.id !== hw.id) { xs.push(other.x); ys.push(other.y); }
+    const guides = [];
+    const pick = (v, cands) => {
+      let best = null;
+      for (const c of cands) if (Math.abs(c - v) <= tol && (!best || Math.abs(c - v) < Math.abs(best - v))) best = c;
+      return best;
+    };
+    let x = pick(local.x, xs), y = pick(local.y, ys);
+    if (x !== null) guides.push({ axis: "x", value: x }); else x = Math.round(local.x);
+    if (y !== null) guides.push({ axis: "y", value: y }); else y = Math.round(local.y);
+    return { x: Number(x.toFixed(3)), y: Number(y.toFixed(3)), guides };
+  }
+  function hardwarePointerDown(e, p) {
+    const t = e.target.closest?.("[data-hardware]");
+    if (!t || ctx.tool() !== "select") return false;
+    const [partId, hwId] = t.dataset.hardware.split("|");
+    const part = partById(partId), hw = part?.hardware.find((h) => h.id === hwId);
+    const item = project().items.find((i) => i.id === part?.itemId);
+    if (!hw || !item) return false;
+    ctx.selectIds([item.id]);
+    hwDrag = { partId, hwId, item, start: transform(p, item, true), origin: { x: hw.x, y: hw.y }, moved: false, guides: [] };
+    $("#canvas").setPointerCapture?.(e.pointerId);
+    return true;
+  }
+  function hardwarePointerMove(p, mmPerPx) {
+    if (!hwDrag) return false;
+    const part = partById(hwDrag.partId), hw = part?.hardware.find((h) => h.id === hwDrag.hwId);
+    if (!hw) { hwDrag = null; return false; }
+    if (!hwDrag.moved) { ctx.checkpoint(); hwDrag.moved = true; }
+    const local = transform(p, hwDrag.item, true);
+    const raw = { x: hwDrag.origin.x + local.x - hwDrag.start.x, y: hwDrag.origin.y + local.y - hwDrag.start.y };
+    const snapped = snapHardware(part, hwDrag.item, hw, raw, mmPerPx);
+    hw.x = snapped.x; hw.y = snapped.y;
+    hwDrag.guides = snapped.guides;
+    return true;
+  }
+  function hardwarePointerUp() {
+    if (!hwDrag) return false;
+    const moved = hwDrag.moved;
+    hwDrag = null;
+    if (moved) ctx.commit();
+    return true;
+  }
+  const dragging = () => Boolean(hwDrag);
   // ---- joints
   function createJoint(aPart, aLine, bPart, bLine, reverse) {
     mutate((l) => {
@@ -359,6 +454,7 @@ ${issues.length ? `<ul class="leather-warnings">${issues.map((i) => `<li class="
 <h4>金具 <span>${part.hardware.length}</span></h4>${part.hardware.map((hw) => hardwareBlock(part, hw)).join("")}
 <div class="leather-add"><label class="full-label">追加する金具<select id="leather-hardware-preset">${[...leather().hardwarePresets, ...HARDWARE_PRESETS].map((p) => `<option value="${p.id}" ${p.id === lastPreset ? "selected" : ""}>${esc(HARDWARE_TYPES[p.type] ?? p.type)}: ${esc(p.label)}</option>`).join("")}</select></label><button data-leather-action="add-hardware-center" data-part="${part.id}">＋ 中央に配置</button><button data-tool="hardware" class="${ctx.tool() === "hardware" ? "active" : ""}">＋ クリックで配置</button></div>
 <h4>縫合（パーツ間の穴合わせ） <span>${leather().joints.filter((j) => j.a.partId === part.id || j.b.partId === part.id).length}</span></h4>${jointsBlock(part, d)}
+<h4>複製・合成</h4><div class="leather-add"><button data-leather-action="mirror">⇔ ミラーコピー <small>左右対称の相手パーツ</small></button><button data-leather-action="boolean-union" ${ctx.selectedItems().length > 1 ? "" : "disabled"}>∪ 合体</button><button data-leather-action="boolean-difference" ${ctx.selectedItems().length > 1 ? "" : "disabled"}>− 抜く</button></div><p class="note">ミラーコピーは縫い穴の傾きも反転した独立パーツで、縫合により穴数を合わせます。合体・抜くは Shift で 2 つ以上選んでから（最初の選択が土台）。</p>
 <button class="text-link danger" data-leather-action="unmake-part" data-part="${part.id}">革パーツを解除（図形は残す）</button></section>`;
   }
   // Offer for a closed shape that is not a part yet.
@@ -405,8 +501,17 @@ ${issues.length ? `<ul class="leather-warnings">${issues.map((i) => `<li class="
       }
       for (const fd of dp.folds) html += `<path d="${pathD([fd.points])}" fill="none" stroke="#2f9e5f" stroke-width="${thin * 1.5}" stroke-dasharray="${fd.fold.kind === "valley" ? `${thin * 6} ${thin * 3} ${thin} ${thin * 3}` : `${thin * 6} ${thin * 3}`}" pointer-events="none"/>`;
       for (const hw of dp.hardware) {
-        html += `<path d="${pathD(hw.contours)}" fill="#1a3b5c" fill-opacity="0.8" stroke="none" pointer-events="none"/>`;
-        if (hw.preset.outer) html += `<circle cx="${hw.center.x}" cy="${hw.center.y}" r="${hw.preset.outer / 2}" fill="none" stroke="#8a6a4a" stroke-width="${thin}" stroke-dasharray="${thin * 2} ${thin * 2}" pointer-events="none"/>`;
+        const r = Math.max((hw.preset.outer ?? 0) / 2, 2.5);
+        html += `<g data-hardware="${dp.part.id}|${hw.placement.id}" class="hardware-handle" style="cursor:move"><circle cx="${hw.center.x}" cy="${hw.center.y}" r="${r}" fill="#ffffff" fill-opacity="0.01"/><path d="${pathD(hw.contours)}" fill="#1a3b5c" fill-opacity="0.8" stroke="none"/>${hw.preset.outer ? `<circle cx="${hw.center.x}" cy="${hw.center.y}" r="${hw.preset.outer / 2}" fill="none" stroke="#8a6a4a" stroke-width="${thin}" stroke-dasharray="${thin * 2} ${thin * 2}"/>` : ""}</g>`;
+      }
+      if (hwDrag?.guides?.length && hwDrag.item.id === dp.item.id) {
+        const box = bounds(dp.outline);
+        for (const g of hwDrag.guides) {
+          const a = g.axis === "x" ? transform({ x: g.value, y: -1000 }, dp.item) : transform({ x: -1000, y: g.value }, dp.item);
+          const b = g.axis === "x" ? transform({ x: g.value, y: 1000 }, dp.item) : transform({ x: 1000, y: g.value }, dp.item);
+          html += `<path d="M${a.x} ${a.y} L${b.x} ${b.y}" stroke="#e0552e" stroke-width="${thin}" stroke-dasharray="${thin * 3} ${thin * 2}" pointer-events="none"/>`;
+        }
+        void box;
       }
     }
     for (const dj of d.joints) {
@@ -477,7 +582,10 @@ ${issues.length ? `<ul class="leather-warnings">${issues.map((i) => `<li class="
       return true;
     }
     const a = t.dataset.leatherAction;
-    if (a === "convert") convertSelection(false);
+    if (a === "mirror") mirrorSelection();
+    else if (a === "boolean-union") applyBooleanLeather("union");
+    else if (a === "boolean-difference") applyBooleanLeather("difference");
+    else if (a === "convert") convertSelection(false);
     else if (a === "convert-stitch") convertSelection(true);
     else if (a === "add-full-stitch") addFullStitch();
     else if (a === "unmake-part") unmakePart(t.dataset.part);
@@ -528,6 +636,7 @@ ${issues.length ? `<ul class="leather-warnings">${issues.map((i) => `<li class="
     return true;
   }
   function pointerDown(e, p, mmPerPx) {
+    if (hardwarePointerDown(e, p)) return true;
     const tool = ctx.tool();
     if (!isLeatherTool(tool)) return false;
     if (tool === "hardware") {
@@ -545,6 +654,7 @@ ${issues.length ? `<ul class="leather-warnings">${issues.map((i) => `<li class="
     return true;
   }
   function pointerMove(p, mmPerPx) {
+    if (hwDrag) return hardwarePointerMove(p, mmPerPx);
     const tool = ctx.tool();
     if (!["stitch-edge", "fold-edge"].includes(tool)) {
       if (hover) {
@@ -565,24 +675,39 @@ ${issues.length ? `<ul class="leather-warnings">${issues.map((i) => `<li class="
   function onItemsRemoved(ids) {
     remapItems(leather(), { removed: ids });
   }
-  function onItemsReplaced(map) {
-    remapItems(leather(), { replaced: map });
+  // After a boolean the outline is a new fitted path whose node numbers
+  // mean nothing to the old edge runs, so those become whole-outline lines.
+  function onItemsReplaced(map, { newShape = false } = {}) {
+    const l = leather();
+    remapItems(l, { replaced: map });
+    if (!newShape) return;
+    let reset = 0;
+    for (const part of l.parts)
+      if (Object.values(map).includes(part.itemId))
+        for (const line of [...part.stitchLines, ...part.foldLines])
+          if (line.source.from !== null) {
+            line.source = { subpath: 0, from: null, to: null };
+            reset++;
+          }
+    if (reset) ctx.notify(`形状が変わったため、辺を指定していた ${reset} 本の線を全周に戻しました。必要なら「辺に縫い線」で引き直してください。`);
   }
+  const applyBooleanLeather = (op) => ctx.applyBoolean?.(op);
   function modeText(tool) {
     return isLeatherTool(tool) ? `${LEATHER_TOOLS[tool].label} · 革パーツ` : null;
   }
   const hint = (tool) => LEATHER_TOOLS[tool]?.hint ?? null;
   function toolbarHTML() {
-    return `<div class="tool-group leather-tools"><span class="tool-group-label">LEATHER</span><button id="leather-convert" class="tool" title="選択した閉じた図形を革パーツにして、外周に縫い穴を作る"><span class="tool-icon">✦</span>縫い穴を作る</button>${Object.entries(LEATHER_TOOLS).map(([id, t]) => `<button data-tool="${id}" class="tool" title="${esc(t.hint)}"><span class="tool-icon">${t.icon}</span>${t.label}</button>`).join("")}</div>`;
+    return `<div class="tool-group leather-tools"><span class="tool-group-label">LEATHER</span><button id="leather-convert" class="tool" title="選択した閉じた図形を革パーツにして、外周に縫い穴を作る"><span class="tool-icon">✦</span>縫い穴を作る</button><button id="leather-mirror" class="tool" title="選択した革パーツの左右対称コピーを作る（縫い穴の傾きも反転、縫合で穴数を合わせる）"><span class="tool-icon">⇔</span>ミラー</button><button id="leather-union" class="tool" title="選択した 2 つ以上の図形を合体（結合）"><span class="tool-icon">∪</span>合体</button><button id="leather-difference" class="tool" title="最初に選択した図形から残りを抜く（切り抜き）"><span class="tool-icon">−</span>抜く</button>${Object.entries(LEATHER_TOOLS).map(([id, t]) => `<button data-tool="${id}" class="tool" title="${esc(t.hint)}"><span class="tool-icon">${t.icon}</span>${t.label}</button>`).join("")}</div>`;
   }
   function menuEntries(items) {
     const one = items.length === 1 ? items[0] : null;
     const out = [];
     if (items.some((i) => canBePart(i) && !partOf(i.id))) out.push(["leather-convert-stitch", "縫い穴を作る（革パーツ化）", "", true], ["leather-convert", "革パーツにする", "", true]);
-    if (one && partOf(one.id)) out.push(["leather-add-full", "全周に縫い線を追加", "", true], ["leather-unmake", "革パーツを解除", "", true]);
+    if (one && partOf(one.id)) out.push(["leather-add-full", "全周に縫い線を追加", "", true], ["leather-mirror", "ミラーコピー（左右対称の相手パーツ）", "", true], ["leather-unmake", "革パーツを解除", "", true]);
     return out;
   }
   const menuActions = {
+    "leather-mirror": mirrorSelection,
     "leather-convert-stitch": () => convertSelection(true),
     "leather-convert": () => convertSelection(false),
     "leather-add-full": addFullStitch,
@@ -596,6 +721,7 @@ ${issues.length ? `<ul class="leather-warnings">${issues.map((i) => `<li class="
   return {
     derived, panelHTML, overlay, previewHTML, checksHTML, exportSVG, handleClick, handleInput, handleChange, pointerDown, pointerMove, cancel,
     onItemsRemoved, onItemsReplaced, modeText, hint, toolbarHTML, menuEntries, menuActions, isLeatherTool, isPart, partColor, anyConvertible,
-    convertSelection, placeTemplate, TEMPLATES,
+    convertSelection, placeTemplate, TEMPLATES, mirrorPartsFor, mirrorSelection, hardwarePointerUp, dragging,
+    anyPartSelected: () => ctx.selectedItems().some((i) => partOf(i.id)),
   };
 }

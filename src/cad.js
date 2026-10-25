@@ -6,6 +6,7 @@ import ClipperLib from "clipper-lib";
 import { transform, worldContours, bounds, shapeContours, TOLERANCE } from "./geometry.js";
 import { pathContours, pathFromContours, shapePath, transformPath } from "./path.js";
 import { rotateAbout, normalizeAngle } from "./edit.js";
+import { filletCurvedCorner } from "./leather/fillet.js";
 
 const P = (x, y) => ({ x, y });
 const sub = (a, b) => P(a.x - b.x, a.y - b.y);
@@ -455,10 +456,39 @@ function replaceCorner(path, s, i, newNodes) {
 }
 export function filletCorner(path, s, i, radius) {
   if (!(radius > 0)) throw Error("半径は0より大きい値です。");
-  const { c, p, q, u, v, theta } = cornerOf(path, s, i);
+  // LeatherFab: corners that involve a curve use the general tangent-arc
+  // fillet (leather/fillet.js); line–line corners keep the exact solution.
+  {
+    const sp = path[s],
+      n = sp?.nodes.length ?? 0,
+      pi = sp?.closed ? (i - 1 + n) % n : i - 1,
+      ni = sp?.closed ? (i + 1) % n : i + 1;
+    if (sp && pi >= 0 && ni < n && (!straight(sp.nodes[pi], sp.nodes[i]) || !straight(sp.nodes[i], sp.nodes[ni])))
+      return filletCurvedCorner(path, s, i, radius);
+  }
+  let corner;
+  try {
+    corner = cornerOf(path, s, i);
+  } catch (e) {
+    // Fitted outlines often have short straight facets next to a corner;
+    // the general fillet follows the smooth chain beyond them.
+    try {
+      return filletCurvedCorner(path, s, i, radius);
+    } catch {
+      throw e;
+    }
+  }
+  const { c, p, q, u, v, theta } = corner;
   const t = radius / Math.tan(theta / 2);
-  if (t > dist(c, p) + 1e-6 || t > dist(c, q) + 1e-6)
-    throw Error(`半径が大きすぎます（この角の最大は約 ${num(Math.min(dist(c, p), dist(c, q)) * Math.tan(theta / 2)).toFixed(2)} mm）。`);
+  if (t > dist(c, p) + 1e-6 || t > dist(c, q) + 1e-6) {
+    // Too long for the two straight facets: let the general fillet continue
+    // across smoothly joined neighbours before giving up.
+    try {
+      return filletCurvedCorner(path, s, i, radius);
+    } catch {
+      throw Error(`半径が大きすぎます（この角の最大は約 ${num(Math.min(dist(c, p), dist(c, q)) * Math.tan(theta / 2)).toFixed(2)} mm）。`);
+    }
+  }
   const A = add(c, mul(u, t)),
     B = add(c, mul(v, t)),
     phi = Math.PI - theta,

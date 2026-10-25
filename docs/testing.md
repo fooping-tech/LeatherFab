@@ -45,3 +45,10 @@
 - リポジトリ: https://github.com/fooping-tech/LeatherFab
 - GitHub Pages（Actions ワークフロー `pages.yml`、`build_type: workflow`）: https://fooping-tech.github.io/LeatherFab/ （紹介ページ）、https://fooping-tech.github.io/LeatherFab/app/ （エディタ）
 - 初回デプロイ直後は Pages がレガシーのブランチ配信になっており、未ビルドの HTML が配信された。`build_type` を `workflow` に変更して再実行し、ビルド済みアセット（`/LeatherFab/assets/…`）が配信されることを確認した。
+
+## 2026-10-25 追加機能の検証
+
+- 自動テスト: 226 件すべて成功（追加: `tests/fillet.test.js` 4 件、`tests/mirror.test.js` 2 件、`tests/cad.test.js` の曲線フィレットの期待を更新）。
+- ミラー: 非対称な外形（切り欠き付き角丸長方形）をミラーし、穴位置が 0.02 mm 以内、穴の傾き（スリット輪郭）が 0.05 mm 以内で鏡像一致。縫合の位置ずれ < 0.01 mm。縫い線のインセットの Clipper 円弧許容を 0.002 mm に細かくして達成（0.02 mm では凹角付近で傾きが 3° ずれた）。
+- 曲線フィレット: 直線どうしで解析解と一致、直線×曲線 90°、曲線×曲線カスプ（r = 3, 8、円弧半径誤差 < 0.05 mm）、閉パスのノード 0。
+- ブラウザ（Playwright）: AirTag 裏のミラーコピー作成 → ミラー側の幅だけ変更（元は不変、縫合が長さ差 8.0 mm を警告）→ 金具をドラッグ（中心線 x=25 と 1 mm グリッドにスナップ）→ 長方形 2 つを合体 → 楕円と長方形を合体した曲線×直線の角にフィレット（成功、取り消し可）。コンソールエラー 0。

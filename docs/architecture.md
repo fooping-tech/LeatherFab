@@ -34,7 +34,7 @@ LeatherFab は TypeFab（https://github.com/fooping-tech/TypeFab）のエディ�
 
 | 層 | ファイル | 責務 | 依存 |
 |---|---|---|---|
-| CAD Geometry Core | `geometry.js` `path.js` `cad.js` `polygon.js` `operations.js` `leather/polyline.js` | ベジェ→折れ線（許容 0.02 mm）、ノード編集、Clipper オフセット、フィレット、弧長パラメータ化、接線、角検出 | clipper-lib |
+| CAD Geometry Core | `geometry.js` `path.js` `cad.js` `polygon.js` `operations.js` `leather/polyline.js` `leather/fillet.js` | ベジェ→折れ線（許容 0.02 mm）、ノード編集、Clipper オフセット、フィレット（直線どうしは解析解、曲線を含む角は `fillet.js` の接円探索）、弧長パラメータ化、接線、角検出 | clipper-lib |
 | Leather Domain Core | `leather/model.js` `leather/stitch.js` `leather/hardware.js` `leather/templates.js` | データモデルと検証、縫い穴配置、穴形状、金具、テンプレート | Geometry Core |
 | Dependency Engine | `leather/derive.js` | 外形アイテムから派生要素を再計算。無効参照は `issues` として報告し派生要素を欠落させる（黙って不正形状を作らない） | Domain Core |
 | Manufacturing Engine | `leather/manufacturing.js` | 加工属性の明示、カーフ、検証、mm 実寸 SVG | Dependency Engine |
@@ -58,5 +58,5 @@ item (外形) ← part ← stitchLine / foldLine / hardware ← joint
 ## TypeFab との関係
 
 - TypeFab のリポジトリは変更していない。LeatherFab は `src/` をコピーしたフォーク（注文・Worker・ランディング・ハンコ UI は除外。ハンコのコードは `stamp.js` として残るが UI からは隠している）。
-- `project.js` に `leather` の検証を追加した以外、TypeFab モジュールは無変更。TypeFab の既存テスト（195 件）はそのまま通る。
+- TypeFab モジュールへの変更は 2 か所だけ: `project.js` に `leather` の検証、`cad.js` の `filletCorner` に曲線を含む角のフォールバック（`leather/fillet.js`）。TypeFab の既存テスト（195 件）はそのまま通る。
 - 将来は `geometry.js` `path.js` `cad.js` `polygon.js` `leather/polyline.js` を共通 CAD Core パッケージとして切り出す構成が理想。
