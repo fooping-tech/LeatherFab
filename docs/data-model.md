@@ -32,6 +32,7 @@
 | `foldLines` | FoldLine[] | 折り線 |
 | `hardware` | HardwarePlacement[] | 金具 |
 | `outlineOperation` | `CUT` 等 | 外形の加工属性 |
+| `mirrorOf` | optional | ミラーコピーのリンク `{ partId, axis: {a, b}, itemKey, partKey }`。元パーツの外形（item）と設定（part）の指紋を保持し、変わったら `syncMirrorParts()` がコピーの外形を再反転し設定を鏡像で作り直す（線・金具の id は位置で引き継ぐ）。一方向。元が削除されるとリンクは外れる |
 
 ## Geometry source（辺の参照）
 

@@ -1587,6 +1587,8 @@ function render({ properties = true } = {}) {
   $("#app").setAttribute("aria-busy", String(loading));
   ensureLayers(project);
   normalizeGroups(project);
+  // LeatherFab: linked mirror copies follow their source (one way).
+  if (!loading && leather.syncMirrors()) persist();
   if (!project.layers.some((l) => l.id === activeLayer))
     activeLayer = project.layers[0].id;
   const valid = selectionIds().filter((id) =>
@@ -2259,7 +2261,7 @@ function cadConfirm() {
   checkpoint();
   project.items.push(...copies);
   // LeatherFab: a mirrored part gets a mirrored part (holes flipped, joined).
-  if (cad.tool === "mirror") leather.mirrorPartsFor(selectionWithBridges(), copies);
+  if (cad.tool === "mirror") leather.mirrorPartsFor(selectionWithBridges(), copies, { a: cad.points[0], b: cad.points[1] });
   multi = copies.filter((i) => i.type !== "bridge").map((i) => i.id);
   selected = multi.at(-1) || null;
   const label = CAD_TOOLS[cad.tool].label;
