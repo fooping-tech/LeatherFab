@@ -23,7 +23,7 @@ import { TEMPLATES } from "./leather/templates.js";
 import { pathContours } from "./path.js";
 
 export const LEATHER_TOOLS = Object.freeze({
-  "hole-erase": { label: "穴を消す", icon: "⊘", hint: "消したい縫い穴をタップ／クリック · 薄く表示された消した穴をタップすると戻る · Escで終了" },
+  "hole-erase": { label: "穴を消す", icon: "⊘", hint: "穴をタップで1つ消す · ドラッグで囲んでまとめて消す · Shift（スマホは「複数選択」）を押して別の穴をタップすると、直前に消した穴からその穴までの区間を消す · 薄い印をタップで戻す · Escで終了" },
   "stitch-edge": { label: "辺に縫い線", icon: "⋯", hint: "革パーツの辺をクリックして縫い線を追加 · 隣の辺を続けてクリックすると1本につながる · Escで終了" },
   seam: { label: "縫い合わせ", icon: "⟗", hint: "縫い合わせる辺を2つクリック: 1つ目のパーツの辺 → 相手のパーツの辺 · 両方に同じ設定の縫い線を作り、穴数と位置を合わせます · Escで終了" },
   "fold-edge": { label: "辺に折り線", icon: "⌇", hint: "革パーツの辺をクリックして、その辺に平行な折り線（SCORE）を追加 · Escで終了" },
@@ -452,6 +452,17 @@ export function createLeatherUI(ctx) {
     hwDrag.guides = snapped.guides;
     return true;
   }
+  function pointerUp() {
+    if (eraseDrag) {
+      const d = eraseDrag;
+      eraseDrag = null;
+      if (d.moved) eraseInRect(d.start, d.current);
+      else eraseAt(d.start, d.mmPerPx, d.extend);
+      ctx.renderCanvas();
+      return true;
+    }
+    return hardwarePointerUp();
+  }
   function hardwarePointerUp() {
     if (!hwDrag) return false;
     const moved = hwDrag.moved;
@@ -459,7 +470,7 @@ export function createLeatherUI(ctx) {
     if (moved) ctx.commit();
     return true;
   }
-  const dragging = () => Boolean(hwDrag);
+  const dragging = () => Boolean(hwDrag || eraseDrag);
   // ---- parametric history (timeline). A part's outline can be rebuilt from
   // its base sketch plus features; see leather/history.js.
   function ensureHistory(part, item) {
@@ -617,6 +628,8 @@ ${rows}
   }
   // ---- hole eraser: tap a hole to leave it out, tap its ghost to bring it back.
   let holeHover = null; // { x, y, kind: "hole" | "ghost" }
+  let eraseDrag = null; // { start, current, moved }
+  let lastErased = null; // { partId, lineId, u }
   function holeTargets() {
     const out = [];
     for (const dp of derived().parts) {
@@ -641,19 +654,61 @@ ${rows}
     }
     return best;
   }
-  function eraseAt(p, mmPerPx) {
+  function eraseAt(p, mmPerPx, extend = false) {
     const t = nearestHole(p, Math.max(mmPerPx * 14, 1.5));
-    if (!t) return ctx.notify("縫い穴の上をタップしてください。");
+    if (!t) return ctx.notify("縫い穴の上をタップしてください。ドラッグで囲むとまとめて消せます。");
+    // Shift / multi-select: erase the run from the last erased hole to this one.
+    if (extend && t.kind === "hole" && lastErased && lastErased.lineId === t.st.line.id && lastErased.partId === t.part.id) {
+      const L = t.st.result.length, closed = t.st.closed;
+      const u0 = lastErased.u, u1 = t.u;
+      let lo = Math.min(u0, u1), hi = Math.max(u0, u1), wrap = false;
+      if (closed && hi - lo > 0.5) { wrap = true; [lo, hi] = [hi, lo]; } // the shorter way round
+      const inRun = (u) => (wrap ? u >= lo - 1e-9 || u <= hi + 1e-9 : u >= lo - 1e-9 && u <= hi + 1e-9);
+      const us = t.st.holes.map((h) => h.s / L).filter(inRun);
+      return mutate(() => {
+        const line = partById(t.part.id)?.stitchLines.find((l) => l.id === t.st.line.id);
+        if (!line) return 0;
+        const have = new Set((line.skipped ?? []).map((k) => k.u.toFixed(6)));
+        const add = us.filter((u) => !have.has(u.toFixed(6))).map((u) => ({ u: Number(u.toFixed(6)) }));
+        line.skipped = [...(line.skipped ?? []), ...add];
+        lastErased = { partId: t.part.id, lineId: t.st.line.id, u: t.u };
+        return add.length;
+      }, (n) => `区間の穴を ${n} 個消しました。`);
+    }
     mutate(() => {
       // derived() hands out clones; edit the real part.
       const line = partById(t.part.id)?.stitchLines.find((l) => l.id === t.st.line.id);
       if (!line) return;
-      if (t.kind === "hole") line.skipped = [...(line.skipped ?? []), { u: Number(t.u.toFixed(6)) }];
-      else line.skipped = (line.skipped ?? []).filter((k) => k !== t.skip && Math.abs(k.u - t.skip.u) > 1e-9);
+      if (t.kind === "hole") {
+        line.skipped = [...(line.skipped ?? []), { u: Number(t.u.toFixed(6)) }];
+        lastErased = { partId: t.part.id, lineId: t.st.line.id, u: t.u };
+      } else line.skipped = (line.skipped ?? []).filter((k) => k !== t.skip && Math.abs(k.u - t.skip.u) > 1e-9);
       if (line.skipped && !line.skipped.length) delete line.skipped;
       ctx.selectIds([t.part.itemId]);
       return t.kind;
-    }, (k) => (k === "hole" ? "穴を1つ消しました。薄い印をタップすると戻せます。縫合相手の対応する穴も一緒に省きます。" : "穴を戻しました。"));
+    }, (k) => (k === "hole" ? "穴を1つ消しました。Shift＋タップで区間、ドラッグで囲んでまとめて消せます。薄い印をタップすると戻せます。" : "穴を戻しました。"));
+  }
+  // Marquee: every hole inside the rectangle is erased (ghosts inside are restored).
+  function eraseInRect(a, b) {
+    const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+    const hits = holeTargets().filter((t) => t.x >= x0 && t.x <= x1 && t.y >= y0 && t.y <= y1);
+    if (!hits.length) return ctx.notify("囲んだ範囲に縫い穴がありません。");
+    mutate(() => {
+      let erased = 0, restored = 0;
+      for (const t of hits) {
+        const line = partById(t.part.id)?.stitchLines.find((l) => l.id === t.st.line.id);
+        if (!line) continue;
+        if (t.kind === "hole") {
+          line.skipped = [...(line.skipped ?? []), { u: Number(t.u.toFixed(6)) }];
+          erased++;
+        } else {
+          line.skipped = (line.skipped ?? []).filter((k) => Math.abs(k.u - t.skip.u) > 1e-9);
+          if (!line.skipped.length) delete line.skipped;
+          restored++;
+        }
+      }
+      return { erased, restored };
+    }, ({ erased, restored }) => `${erased ? `穴を ${erased} 個消しました。` : ""}${restored ? `消していた穴を ${restored} 個戻しました。` : ""}`);
   }
   function restoreAll(partId, lineId) {
     mutate(() => {
@@ -841,6 +896,10 @@ ${historyPanel(part, item)}
       const pr = dj.pairs[0];
       if (pr) html += `<path d="M${pr.a.x} ${pr.a.y} L${pr.b.x} ${pr.b.y}" stroke="#d08a2e" stroke-width="${thin}" stroke-dasharray="${thin * 2} ${thin * 2}" fill="none" pointer-events="none"/>`;
     }
+    if (eraseDrag?.moved) {
+      const a = eraseDrag.start, b = eraseDrag.current;
+      html += `<rect x="${Math.min(a.x, b.x)}" y="${Math.min(a.y, b.y)}" width="${Math.abs(b.x - a.x)}" height="${Math.abs(b.y - a.y)}" fill="#b3453b" fill-opacity="0.08" stroke="#b3453b" stroke-width="${thin}" stroke-dasharray="${thin * 3} ${thin * 2}" pointer-events="none"/>`;
+    }
     if (ctx.tool() === "hole-erase") {
       for (const t of holeTargets())
         if (t.kind === "ghost") html += `<circle cx="${t.x}" cy="${t.y}" r="${thin * 3}" fill="none" stroke="#b3453b" stroke-width="${thin}" stroke-dasharray="${thin * 1.5} ${thin}" pointer-events="none"/>`;
@@ -977,7 +1036,8 @@ ${historyPanel(part, item)}
       return true;
     }
     if (tool === "hole-erase") {
-      eraseAt(p, mmPerPx);
+      eraseDrag = { start: p, current: p, moved: false, mmPerPx, extend: Boolean(e.shiftKey || ctx.multiSelect?.()) };
+      $("#canvas").setPointerCapture?.(e.pointerId);
       return true;
     }
     if (tool === "seam") {
@@ -996,6 +1056,11 @@ ${historyPanel(part, item)}
   function pointerMove(p, mmPerPx) {
     if (hwDrag) return hardwarePointerMove(p, mmPerPx);
     const tool = ctx.tool();
+    if (tool === "hole-erase" && eraseDrag) {
+      eraseDrag.current = p;
+      if (Math.hypot(p.x - eraseDrag.start.x, p.y - eraseDrag.start.y) > mmPerPx * 6) eraseDrag.moved = true;
+      return true;
+    }
     if (tool === "hole-erase") {
       const t = nearestHole(p, Math.max(mmPerPx * 14, 1.5));
       const changed = (t?.x !== holeHover?.x) || t?.y !== holeHover?.y;
@@ -1020,6 +1085,8 @@ ${historyPanel(part, item)}
     holeHover = null;
     continuing = null;
     seamFirst = null;
+    eraseDrag = null;
+    lastErased = null;
   }
   function onItemsRemoved(ids) {
     remapItems(leather(), { removed: ids });
@@ -1128,7 +1195,7 @@ ${historyPanel(part, item)}
   return {
     derived, panelHTML, overlay, previewHTML, checksHTML, exportSVG, handleClick, handleInput, handleChange, pointerDown, pointerMove, cancel,
     onItemsRemoved, onItemsReplaced, modeText, hint, toolbarHTML, menuEntries, menuActions, isLeatherTool, isPart, partColor, anyConvertible,
-    convertSelection, placeTemplate, TEMPLATES, mirrorPartsFor, mirrorSelection, syncMirrors, hardwarePointerUp, dragging, recordCorner,
+    convertSelection, placeTemplate, TEMPLATES, mirrorPartsFor, mirrorSelection, syncMirrors, hardwarePointerUp, pointerUp, dragging, recordCorner,
     anyPartSelected: () => ctx.selectedItems().some((i) => partOf(i.id)),
   };
 }
