@@ -7,7 +7,7 @@
 // and the dependent element is simply absent — never silently wrong.
 import { transform, worldContours } from "../geometry.js";
 import { pathContours } from "../path.js";
-import { workingPathOf } from "../cad.js";
+import { workingPathOf, reflectPoint, reflectAngle, mirrorItems } from "../cad.js";
 import { placeHoles, holeContour } from "./stitch.js";
 import { curve, offsetInward, isClosedPolyline, nearestOnPolyline, totalLength, pointAt, slice, nearestArcLength, angleAt as tangentDeg } from "./polyline.js";
 import { presetById, hardwareContours } from "./hardware.js";
@@ -177,7 +177,32 @@ export function derivePart(project, part) {
 // partner. Positions are compared in normalised seam coordinates (0..1 along
 // the line, optionally reversed), which is what matters when the two edges
 // are sewn together, and reported as deviations in mm on the slave line.
-export function deriveJoint(joint, derivedParts) {
+// For a linked mirror copy, the mapping master → copy: reflection across the
+// stored axis, then the offset by which the copy has since been moved.
+function mirrorMapping(project, masterPart, slavePart, masterItem, slaveItem) {
+  const m = slavePart.mirrorOf?.partId === masterPart.id ? slavePart.mirrorOf : masterPart.mirrorOf?.partId === slavePart.id ? masterPart.mirrorOf : null;
+  if (!m || !masterItem || !slaveItem) return null;
+  const copyIsSlave = slavePart.mirrorOf?.partId === masterPart.id;
+  const srcItem = copyIsSlave ? masterItem : slaveItem,
+    copyItem = copyIsSlave ? slaveItem : masterItem;
+  let expected;
+  try {
+    [expected] = mirrorItems([srcItem], m.axis.a, m.axis.b, () => "expected");
+  } catch {
+    return null;
+  }
+  if (!expected || Math.abs((expected.rotation ?? 0) - copyItem.rotation) > 1e-6) return null;
+  const dx = copyItem.x - expected.x,
+    dy = copyItem.y - expected.y;
+  const fwd = (p) => {
+    const q = reflectPoint(p, m.axis.a, m.axis.b);
+    return { x: q.x + dx, y: q.y + dy };
+  };
+  const back = (p) => reflectPoint({ x: p.x - dx, y: p.y - dy }, m.axis.a, m.axis.b);
+  const ang = (deg) => reflectAngle(deg, m.axis.a, m.axis.b);
+  return copyIsSlave ? { map: fwd, angle: ang } : { map: back, angle: ang };
+}
+export function deriveJoint(joint, derivedParts, project = null) {
   const find = (ref) => {
     const dp = derivedParts.find((d) => d.part.id === ref.partId);
     const st = dp?.stitch.find((s) => s.line.id === ref.lineId);
@@ -195,12 +220,32 @@ export function deriveJoint(joint, derivedParts) {
     slaveHoles = slave.st.allHoles ?? slave.st.holes,
     adjusted = false,
     aligned = false,
+    mirrored = false,
     alignedPattern = null;
+  // Linked mirror copies: the partner's holes are the exact mirror images of
+  // the master's (positions and slants), as long as the copy's outline is
+  // still the mirror of the source (every image lands on the copy's line).
+  const mm = project ? mirrorMapping(project, master.dp.part, slave.dp.part, master.dp.item, slave.dp.item) : null;
+  if (mm && slave.st.points?.length > 1 && masterAll.length) {
+    const c = curve(slave.st.points, slave.st.closed);
+    const images = masterAll.map((h) => ({ ...mm.map(h), tangent: mm.angle(h.tangent), angle: mm.angle(h.angle), anchor: h.anchor }));
+    const onLine = images.every((q) => nearestOnPolyline(c.points, q).d <= 0.3);
+    if (onLine) {
+      slaveHoles = images.map((q, index) => {
+        const s = nearestArcLength(c, q);
+        const hole = { index, x: q.x, y: q.y, s, tangent: q.tangent, angle: q.angle, anchor: q.anchor };
+        hole.contour = holeContour(hole, slave.st.line.pattern);
+        return hole;
+      });
+      slaveResult = { ...slave.st.result, holes: slaveHoles, length: c.length, closed: slave.st.closed, mirrored: true };
+      mirrored = true;
+    }
+  }
   // Stacked pieces (the two lines lie on top of each other): start the
   // slave's holes where the master's first hole is and run the same way,
   // so a closed loop whose path starts elsewhere does not shift its holes
   // by a fraction of the pitch against the master's.
-  if (slave.st.closed && masterAll.length && slave.st.points?.length > 2) {
+  if (!mirrored && slave.st.closed && masterAll.length && slave.st.points?.length > 2) {
     const c = curve(slave.st.points, true);
     const h0 = masterAll[0];
     const hit = nearestOnPolyline(c.points, h0);
@@ -218,7 +263,7 @@ export function deriveJoint(joint, derivedParts) {
       aligned = true;
     }
   }
-  if (slaveHoles.length !== count && count > 0) {
+  if (!mirrored && slaveHoles.length !== count && count > 0) {
     slaveResult = placeHoles(slave.st.points, { ...(alignedPattern ?? slave.st.line.pattern), fit: "count", count }, { closed: slave.st.closed });
     slaveHoles = slaveResult.holes.map((h) => ({ ...h, contour: holeContour(h, slave.st.line.pattern) }));
     adjusted = true;
@@ -256,9 +301,10 @@ export function deriveJoint(joint, derivedParts) {
     }
     masterKept = masterAll.filter((h) => keepA.has(h));
     slaveKept = slaveHoles.filter((h) => keepB.has(h));
+    if (mirrored) maxDeviation = 0; // images by construction
     if (maxDeviation > 1) issues.push(issue("warning", `縫合「${joint.name}」: 穴位置の最大ずれ ${maxDeviation.toFixed(2)} mm（縫い合わせると革がよれる可能性があります）。`, { jointId: joint.id }));
   }
-  return { joint, master: master.st, slave: slave.st, masterHoles: masterKept, slaveHoles: slaveKept, slaveResult, adjusted: adjusted || aligned, aligned, count, lengthDiff, maxDeviation, pairs, issues };
+  return { joint, master: master.st, slave: slave.st, masterHoles: masterKept, slaveHoles: slaveKept, slaveResult, adjusted: adjusted || aligned || mirrored, aligned, mirrored, count, lengthDiff, maxDeviation, pairs, issues };
 }
 // Composition of a part item's world transform with a placement given in
 // that item's local frame: the virtual item where the source part sat.
@@ -386,7 +432,7 @@ export function deriveProject(project) {
   const leather = project.leather;
   const parts = (leather?.parts ?? []).map((p) => derivePart(project, p));
   finishDerivation(project, parts);
-  const joints = (leather?.joints ?? []).map((j) => deriveJoint(j, parts));
+  const joints = (leather?.joints ?? []).map((j) => deriveJoint(j, parts, project));
   for (const dj of joints) {
     if (dj.error) continue;
     if (dj.masterHoles && dj.masterHoles.length !== dj.master.holes.length) dj.master.holes = dj.masterHoles;
