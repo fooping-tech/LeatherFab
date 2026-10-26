@@ -97,10 +97,12 @@ test("mirror link: hardware is reflected into the copy, source edits propagate, 
   const d = deriveProject(prj);
   assert.equal(d.joints[0].count, d.parts[0].stitch[0].holes.length);
   assert.ok(d.joints[0].maxDeviation < 0.01);
-  // Copy edit: the source is untouched and nothing syncs back.
+  // Copy edit: the source is untouched and nothing syncs back (the copy's
+  // hardware may be re-seated, since it follows the copy's outline).
   copy.stitchLines[0].offset = 5;
   prj.items[1] = { ...prj.items[1], w: 70, contours: shapeContours("rect", 70, 40, 6) };
-  assert.equal(syncMirrorParts(prj, uid), 0);
+  syncMirrorParts(prj, uid);
+  assert.equal(copy.stitchLines[0].offset, 5, "copy's own edit survives while the source is unchanged");
   assert.equal(src.stitchLines[0].offset, 3);
   assert.ok(close(prj.items[0].w, 80));
   // Detach → source edits stop propagating; the file round-trips.
@@ -170,4 +172,39 @@ test("mirror joint: erasing a hole on the source removes its mirror image on the
   const hc2 = d2_.parts[1].stitch[0].holes;
   assert.equal(hc2.length, hc.length - 1);
   assert.ok(!hc2.some((h) => d2(h, image(victim)) < 5e-3), "the image of the erased hole is gone on the cut copy too");
+});
+
+import fs from "node:fs";
+import { validateProject } from "../src/project.js";
+import { syncMirrorParts as syncAll } from "../src/leather/mirror.js";
+
+test("user file: skips synced onto a linked copy are removed on sync, and only mirror images of the source's erased holes are missing", () => {
+  const p = validateProject(JSON.parse(fs.readFileSync("tests/fixtures/mirror-skips.json", "utf8")));
+  const [src, copy] = p.leather.parts;
+  assert.equal(copy.stitchLines[0].skipped.length, 4, "the file carries the wrongly synced skips");
+  let n = 0;
+  assert.ok(syncAll(p, () => `n${++n}`) > 0);
+  assert.equal(copy.stitchLines[0].skipped, undefined);
+  const d = deriveProject(p);
+  const A = d.parts[0].stitch[0], B = d.parts[1].stitch[0];
+  assert.equal(A.allHoles.length - A.holes.length, 4);
+  assert.equal(B.allHoles.length - B.holes.length, 4);
+  assert.ok(d.joints[0].mirrored);
+  const axisX = copy.mirrorOf.axis.a.x;
+  // The copy's holes are the images of the source's kept holes, and the
+  // images of the erased source holes are absent (B.holes comes from the
+  // joint's mirror pairing, so compare by position).
+  // The copy was moved after mirroring: reflect across the axis, then shift
+  // by the offset read off the hardware pair (source rivet ↔ copy rivet).
+  const box = (rings) => { const xs = rings[0].map((q) => q.x), ys = rings[0].map((q) => q.y); return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) }; };
+  const bs = box(d.parts[0].outline), bc = box(d.parts[1].outline);
+  const shift = { x: bc.x0 - (2 * axisX - bs.x1), y: bc.y0 - bs.y0 };
+  const image = (h) => ({ x: 2 * axisX - h.x + shift.x, y: h.y + shift.y });
+  const at = (list, q) => list.some((g) => Math.abs(g.x - q.x) < 5e-3 && Math.abs(g.y - q.y) < 5e-3);
+  assert.equal(B.holes.length, A.holes.length);
+  for (const h of A.holes) assert.ok(at(B.holes, image(h)), "kept hole has its image");
+  for (const h of A.allHoles.filter((x) => !A.holes.includes(x))) assert.ok(!at(B.holes, image(h)), "erased hole's image is gone");
+  // Both rivets of the copy sit at the (shifted) mirror of the source's.
+  const hs = d.parts[0].hardware.map((h) => h.center), hc = d.parts[1].hardware.map((h) => h.center);
+  for (const h of hs) assert.ok(hc.some((g) => Math.abs(g.x - image(h).x) < 1e-3 && Math.abs(g.y - image(h).y) < 1e-3));
 });
