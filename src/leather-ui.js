@@ -11,11 +11,11 @@ import { nearestNode } from "./cad.js";
 import { nearestSegment } from "./path.js";
 import { isClosed } from "./polygon.js";
 import {
-  ensureLeather, makePart, makeStitchLine, makeFoldLine, makeHardware, makeJoint, partOfItem, remapItems,
+  ensureLeather, makePart, makeStitchLine, makeFoldLine, makeHardware, makeJoint, partOfItem, remapItems, rebaseItemFrames,
   MATERIALS, LASER_LABELS, LIMITS, OPERATIONS, OPERATION_LABELS, DEFAULT_OFFSET,
 } from "./leather/model.js";
 import { HOLE_SHAPES, SPACINGS, FITS, CORNER_MODES, PITCH_PRESETS, PATTERN_LIMITS, DEFAULT_PATTERN, spiOf } from "./leather/stitch.js";
-import { derivePart, deriveJoint, checkParts, outlinePath, relativePlacement, finishDerivation as deriveProjectForProjected } from "./leather/derive.js";
+import { derivePart, deriveJoint, checkParts, outlinePath, relativePlacement, composePlacement, finishDerivation as deriveProjectForProjected } from "./leather/derive.js";
 import { curve as makeCurve, pointAt as curvePointAt } from "./leather/polyline.js";
 import { operationGeometry, applyKerf, checkManufacturing, exportLeatherSVG, manufacturingSummary, OPERATION_COLORS, OPERATION_ORDER } from "./leather/manufacturing.js";
 import { HARDWARE_PRESETS, HARDWARE_TYPES, presetById } from "./leather/hardware.js";
@@ -1026,9 +1026,24 @@ ${historyPanel(part, item)}
   }
   // After a boolean the outline is a new fitted path whose node numbers
   // mean nothing to the old edge runs, so those become whole-outline lines.
-  function onItemsReplaced(map, { newShape = false } = {}) {
+  function onItemsReplaced(map, { newShape = false, oldItems = [], newItem = null } = {}) {
     const l = leather();
+    // Keep hardware and projections where they are on the board even though
+    // the new item's local frame differs (must happen before the re-point).
+    if (newItem) for (const old of oldItems) if (partOf(old.id)) rebaseItemFrames(l, old, newItem, { transform, relativePlacement, composePlacement });
     remapItems(l, { replaced: map });
+    if (newShape) {
+      // Lines projected from a part whose outline just changed: recapture
+      // their placement from where the pieces are now.
+      for (const part of l.parts)
+        if (Object.values(map).includes(part.itemId))
+          for (const other of l.parts)
+            for (const line of other.stitchLines)
+              if (line.source.kind === "projected" && line.source.partId === part.id) {
+                const bottom = project().items.find((i) => i.id === other.itemId);
+                if (bottom) line.source.placement = relativePlacement(bottom, newItem);
+              }
+    }
     if (!newShape) return;
     let reset = 0;
     for (const part of l.parts)
@@ -1048,18 +1063,61 @@ ${historyPanel(part, item)}
   function toolbarHTML() {
     return `<div class="tool-group leather-tools"><span class="tool-group-label">LEATHER</span><button id="leather-convert" class="tool" title="選択した閉じた図形を革パーツにして、外周に縫い穴を作る"><span class="tool-icon">✦</span>縫い穴を作る</button><button id="leather-mirror" class="tool" title="選択した革パーツの左右対称コピーを作る（縫い穴の傾きも反転、縫合で穴数を合わせる）"><span class="tool-icon">⇔</span>ミラー</button><button id="leather-union" class="tool" title="選択した 2 つ以上の図形を合体（結合）"><span class="tool-icon">∪</span>合体</button><button id="leather-difference" class="tool" title="最初に選択した図形から残りを抜く（切り抜き）"><span class="tool-icon">−</span>抜く</button>${Object.entries(LEATHER_TOOLS).map(([id, t]) => `<button data-tool="${id}" class="tool" title="${esc(t.hint)}"><span class="tool-icon">${t.icon}</span>${t.label}</button>`).join("")}</div>`;
   }
+  // Context menu (right click / long press). Tools are entered through ctx.setTool.
   function menuEntries(items) {
     const one = items.length === 1 ? items[0] : null;
+    const parts = items.map((i) => partOf(i.id)).filter(Boolean);
     const out = [];
-    if (items.some((i) => canBePart(i) && !partOf(i.id))) out.push(["leather-convert-stitch", "縫い穴を作る（革パーツ化）", "", true], ["leather-convert", "革パーツにする", "", true]);
-    if (one && partOf(one.id)) out.push(["leather-add-full", "全周に縫い線を追加", "", true], ["leather-mirror", "ミラーコピー（左右対称の相手パーツ）", "", true], ["leather-unmake", "革パーツを解除", "", true]);
+    if (items.some((i) => canBePart(i) && !partOf(i.id))) out.push(["leather-convert-stitch", "✦ 縫い穴を作る（革パーツ化）", "", true], ["leather-convert", "◈ 革パーツにする", "", true]);
+    if (parts.length) {
+      out.push(["leather-add-full", "＋ 全周に縫い線", "", true]);
+      out.push(["leather-tool-stitch-edge", "⋯ 辺に縫い線（辺をクリック）", "", true]);
+      out.push(["leather-tool-fold-edge", "⌇ 辺に折り線", "", true]);
+      out.push(["leather-tool-seam", "⟗ 縫い合わせ（辺を2つクリック）", "", true]);
+      out.push(["leather-tool-hole-erase", "⊘ 穴を1つずつ消す／戻す", "", parts.some((p) => p.stitchLines.length)]);
+      out.push(["leather-hardware-center", "◎ 金具を中央に配置", "", true]);
+      out.push(["leather-tool-hardware", "◎ 金具をクリックで配置", "", true]);
+      out.push("-");
+      out.push(["leather-mirror", "⇔ ミラーコピー（左右対称の相手パーツ）", "", true]);
+      if (parts.length === 2 && parts.every((p) => p.stitchLines.some((l) => l.source.kind !== "projected"))) out.push(["leather-join", "⟗ 2つの縫い線を縫合（穴数・位置を合わせる）", "", true]);
+      if (one && partOf(one.id)) {
+        const part = partOf(one.id);
+        out.push(part.history ? ["leather-history-hole", "◷ 履歴に丸穴を追加", "", true] : ["leather-history-start", "◷ 操作履歴を開始", "", true]);
+        if (part.mirrorOf) out.push(["leather-detach", "⇔ ミラーのリンクを解除", "", true]);
+      }
+      out.push(["leather-unmake", "革パーツを解除（図形は残す）", "", true]);
+    }
     return out;
   }
   const menuActions = {
-    "leather-mirror": mirrorSelection,
     "leather-convert-stitch": () => convertSelection(true),
     "leather-convert": () => convertSelection(false),
     "leather-add-full": addFullStitch,
+    "leather-mirror": mirrorSelection,
+    "leather-tool-stitch-edge": () => ctx.setTool?.("stitch-edge"),
+    "leather-tool-fold-edge": () => ctx.setTool?.("fold-edge"),
+    "leather-tool-seam": () => ctx.setTool?.("seam"),
+    "leather-tool-hole-erase": () => ctx.setTool?.("hole-erase"),
+    "leather-tool-hardware": () => ctx.setTool?.("hardware"),
+    "leather-hardware-center": () => {
+      for (const item of ctx.selectedItems()) {
+        const part = partOf(item.id);
+        if (!part) continue;
+        const ring = worldContours(item).find(isClosed) ?? [];
+        const c = ring.reduce((s, q) => ({ x: s.x + q.x / ring.length, y: s.y + q.y / ring.length }), { x: 0, y: 0 });
+        const local = transform(c, item, true);
+        mutate(() => part.hardware.push(makeHardware(uid(), { presetId: lastPreset, x: Number(local.x.toFixed(2)), y: Number(local.y.toFixed(2)) })), "金具を中央に配置しました。ドラッグで移動、右パネルで種類を変更できます。");
+      }
+    },
+    "leather-join": () => {
+      const parts = ctx.selectedItems().map((i) => partOf(i.id)).filter(Boolean);
+      if (parts.length !== 2) return;
+      const la = parts[0].stitchLines.filter((l) => l.source.kind !== "projected").at(-1), lb = parts[1].stitchLines.filter((l) => l.source.kind !== "projected").at(-1);
+      createJoint(parts[0].id, la?.id, parts[1].id, lb?.id, false);
+    },
+    "leather-history-start": () => { const one = ctx.selectedItems()[0]; const part = one && partOf(one.id); if (part) historyAction("history-start", part.id); },
+    "leather-history-hole": () => { const one = ctx.selectedItems()[0]; const part = one && partOf(one.id); if (part) historyAction("history-hole", part.id); },
+    "leather-detach": () => { const one = ctx.selectedItems()[0]; const part = one && partOf(one.id); if (part) mutate((l) => detachMirror(l, part.id), "ミラーのリンクを解除しました。"); },
     "leather-unmake": () => {
       const one = ctx.selectedItems()[0];
       if (one && partOf(one.id)) unmakePart(partOf(one.id).id);
