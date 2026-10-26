@@ -1023,6 +1023,14 @@ const leather = createLeatherUI({
   renderCanvas: () => renderCanvas(),
   notify,
   applyBoolean: (op) => applyBoolean(op),
+  setTool: (t) => {
+    preview = false;
+    cad = null;
+    pathEdit = warpId = null;
+    leather.cancel();
+    tool = t;
+    render();
+  },
 });
 $("#app").innerHTML = `
 <header><a class="brand" href="../"><span class="brand-mark">l<span>f</span></span><span class="brand-name">LeatherFab</span><span class="beta">ALPHA</span></a><div class="document-title"><span id="project-name"></span><small id="save-status">ローカルプロジェクト</small></div><div class="mobile-actions"><button data-mobile-action="undo" title="元に戻す" aria-label="元に戻す">↶</button><button data-mobile-action="redo" title="やり直す" aria-label="やり直す">↷</button><button id="more-button" title="メニュー" aria-label="メニュー" aria-haspopup="menu">⋯</button><button id="mobile-help" class="help-round" aria-label="使い方">?</button></div><div class="header-actions"><button id="new-project" title="新規プロジェクト">新規</button><button id="open-project" title="TypeFabプロジェクト（.json）を開く、またはSVG・DXFの図形を読み込む（キャンバスへのドロップも可）">開く</button><button id="import-button" title="SVG・DXFの図形、PNG・JPEG・GIFの画像（輪郭をトレース）を加工エリア（ハンコでは印面）の中央に読み込む（キャンバスへのドロップも可）">読み込み</button><button id="save-project">保存</button><button id="export" class="primary">↗ <span class="long">SVGを書き出す</span><span class="short">SVG</span></button></div></header>
@@ -2283,7 +2291,7 @@ function replaceItems(oldItems, newItems) {
     }
   project.items = project.items.filter((i) => !oldIds.has(i.id));
   project.items.splice(index < 0 ? project.items.length : index, 0, ...newItems);
-  if (newItems.length) leather.onItemsReplaced(Object.fromEntries([...oldIds].map((id) => [id, newItems[0].id])));
+  if (newItems.length) leather.onItemsReplaced(Object.fromEntries([...oldIds].map((id) => [id, newItems[0].id])), { oldItems, newItem: newItems[0] });
   else leather.onItemsRemoved([...oldIds]);
   multi = newItems.map((i) => i.id);
   selected = multi.at(-1) || null;
@@ -3272,7 +3280,7 @@ function applyBoolean(operation) {
         b.layerId = result.layerId;
       }
     project.items.push(result);
-    leather.onItemsReplaced(Object.fromEntries(ids.map((id) => [id, result.id])), { newShape: true });
+    leather.onItemsReplaced(Object.fromEntries(ids.map((id) => [id, result.id])), { newShape: true, oldItems: chosen, newItem: result });
     selectItem(result.id);
     preview = false;
     commit();
@@ -4710,6 +4718,8 @@ const menuActions = {
   save: () => $("#save-project").click(),
   export: exportFile,
   ...leather.menuActions,
+  "leather-template-airtag": () => leather.placeTemplate("airtag"),
+  "leather-template-card": () => leather.placeTemplate("card"),
   help: () => $("#help").showModal(),
   licenses: openFontLicenses,
   "align-snap": () => setAlignSnap(!alignSnap),
@@ -4776,6 +4786,10 @@ function menuEntries(onObject) {
       ["paste", "貼り付け", shortcut("V"), clipboard],
       ["select-all", "すべて選択", shortcut("A"), true],
       ["show-all", "非表示をすべて表示", "", project.items.some((i) => i.hidden)],
+      "-",
+      ["leather-template-airtag", "＋ テンプレート: AirTag ケース", "", true],
+      ["leather-template-card", "＋ テンプレート: カードケース", "", true],
+      ["leather-tool-seam", "⟗ 縫い合わせツール", "", leather.anyPartSelected() || project.items.length > 1],
       "-",
       ["preview", preview ? "スケッチに戻る" : "加工プレビュー", "", true],
     ];

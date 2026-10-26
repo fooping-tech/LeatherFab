@@ -152,6 +152,34 @@ export function validateLeather(raw, items = []) {
   void items;
   return out;
 }
+// When an item is replaced by a new one with a different local frame (a
+// boolean result sits at the origin with world-coordinate contours), the
+// part's item-local data must be re-expressed in the new frame so nothing
+// moves on the board: hardware positions, and the placements of lines
+// projected onto this part. Lines projected *from* this part are
+// recaptured from the current positions (the pieces are still stacked).
+export function rebaseItemFrames(leather, oldItem, newItem, { transform, relativePlacement, composePlacement }) {
+  if (!leather || !oldItem || !newItem) return 0;
+  let changed = 0;
+  for (const part of leather.parts) {
+    if (part.itemId !== newItem.id && part.itemId !== oldItem.id) continue;
+    for (const h of part.hardware) {
+      const world = transform({ x: h.x, y: h.y }, oldItem);
+      const local = transform(world, newItem, true);
+      h.x = Number(local.x.toFixed(4));
+      h.y = Number(local.y.toFixed(4));
+      h.rotation = Number((((h.rotation + oldItem.rotation - newItem.rotation + 540) % 360) - 180).toFixed(4));
+      changed++;
+    }
+    for (const line of part.stitchLines)
+      if (line.source.kind === "projected") {
+        const top = composePlacement(oldItem, line.source.placement);
+        line.source.placement = relativePlacement(newItem, { x: top.x, y: top.y, rotation: top.rotation });
+        changed++;
+      }
+  }
+  return changed;
+}
 export const partOfItem = (leather, itemId) => leather?.parts.find((p) => p.itemId === itemId) ?? null;
 export const findLine = (part, lineId) => part.stitchLines.find((l) => l.id === lineId) ?? part.foldLines.find((l) => l.id === lineId) ?? null;
 // Keeps the leather data consistent when items change: deleted items drop
