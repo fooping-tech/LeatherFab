@@ -1023,6 +1023,7 @@ const leather = createLeatherUI({
   renderCanvas: () => renderCanvas(),
   notify,
   applyBoolean: (op) => applyBoolean(op),
+  multiSelect: () => multiSelect,
   setTool: (t) => {
     preview = false;
     cad = null;
@@ -4435,7 +4436,7 @@ $("#canvas").addEventListener("pointermove", (e) => {
 for (const event of ["pointerup", "pointercancel"])
   $("#canvas").addEventListener(event, (e) => {
     cancelLongPress();
-    if (leather.hardwarePointerUp()) return;
+    if (leather.pointerUp()) return;
     if (menuGuard === Infinity) menuGuard = performance.now() + 500;
     if (drag) drag.label = null;
     if (drag?.kind === "draw") {
