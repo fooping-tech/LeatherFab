@@ -7,7 +7,7 @@
 // and the dependent element is simply absent — never silently wrong.
 import { transform, worldContours } from "../geometry.js";
 import { pathContours } from "../path.js";
-import { workingPathOf, reflectPoint, reflectAngle, mirrorItems } from "../cad.js";
+import { workingPathOf, reflectPoint, reflectAngle } from "../cad.js";
 import { placeHoles, holeContour } from "./stitch.js";
 import { curve, offsetInward, isClosedPolyline, nearestOnPolyline, totalLength, pointAt, slice, nearestArcLength, angleAt as tangentDeg } from "./polyline.js";
 import { presetById, hardwareContours } from "./hardware.js";
@@ -177,30 +177,36 @@ export function derivePart(project, part) {
 // partner. Positions are compared in normalised seam coordinates (0..1 along
 // the line, optionally reversed), which is what matters when the two edges
 // are sewn together, and reported as deviations in mm on the slave line.
-// For a linked mirror copy, the mapping master → copy: reflection across the
-// stored axis, then the offset by which the copy has since been moved.
-function mirrorMapping(project, masterPart, slavePart, masterItem, slaveItem) {
+// For a linked mirror copy, the mapping master line → copy line: reflection
+// across the stored axis, then the translation that takes the reflected
+// master line onto the copy's line. The translation is read off the two
+// lines themselves (their vertex centroids), not off item positions, so it
+// still holds after the copy was moved or rebuilt by a boolean (which puts
+// the item at the origin). A rotated or reshaped copy fails the on-line
+// check in the caller and falls back to index pairing.
+function mirrorMapping(masterPart, slavePart, masterLine, slaveLine) {
   const m = slavePart.mirrorOf?.partId === masterPart.id ? slavePart.mirrorOf : masterPart.mirrorOf?.partId === slavePart.id ? masterPart.mirrorOf : null;
-  if (!m || !masterItem || !slaveItem) return null;
-  const copyIsSlave = slavePart.mirrorOf?.partId === masterPart.id;
-  const srcItem = copyIsSlave ? masterItem : slaveItem,
-    copyItem = copyIsSlave ? slaveItem : masterItem;
-  let expected;
-  try {
-    [expected] = mirrorItems([srcItem], m.axis.a, m.axis.b, () => "expected");
-  } catch {
-    return null;
-  }
-  if (!expected || Math.abs((expected.rotation ?? 0) - copyItem.rotation) > 1e-6) return null;
-  const dx = copyItem.x - expected.x,
-    dy = copyItem.y - expected.y;
-  const fwd = (p) => {
-    const q = reflectPoint(p, m.axis.a, m.axis.b);
-    return { x: q.x + dx, y: q.y + dy };
+  if (!m || !masterLine?.length || !slaveLine?.length) return null;
+  // Area centroid (shoelace): independent of how the ring was flattened,
+  // unlike a vertex average. Open runs fall back to the midpoint of their ends.
+  const centroid = (pts) => {
+    if (!isClosedPolyline(pts)) return { x: (pts[0].x + pts.at(-1).x) / 2, y: (pts[0].y + pts.at(-1).y) / 2 };
+    let a = 0, cx = 0, cy = 0;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const p = pts[i], q = pts[i + 1], w = p.x * q.y - q.x * p.y;
+      a += w; cx += (p.x + q.x) * w; cy += (p.y + q.y) * w;
+    }
+    if (Math.abs(a) < 1e-9) return { x: pts[0].x, y: pts[0].y };
+    return { x: cx / (3 * a), y: cy / (3 * a) };
   };
-  const back = (p) => reflectPoint({ x: p.x - dx, y: p.y - dy }, m.axis.a, m.axis.b);
-  const ang = (deg) => reflectAngle(deg, m.axis.a, m.axis.b);
-  return copyIsSlave ? { map: fwd, angle: ang } : { map: back, angle: ang };
+  const cm = reflectPoint(centroid(masterLine), m.axis.a, m.axis.b),
+    cs = centroid(slaveLine);
+  const dx = cs.x - cm.x,
+    dy = cs.y - cm.y;
+  return {
+    map: (p) => { const q = reflectPoint(p, m.axis.a, m.axis.b); return { x: q.x + dx, y: q.y + dy }; },
+    angle: (deg) => reflectAngle(deg, m.axis.a, m.axis.b),
+  };
 }
 export function deriveJoint(joint, derivedParts, project = null) {
   const find = (ref) => {
@@ -225,7 +231,7 @@ export function deriveJoint(joint, derivedParts, project = null) {
   // Linked mirror copies: the partner's holes are the exact mirror images of
   // the master's (positions and slants), as long as the copy's outline is
   // still the mirror of the source (every image lands on the copy's line).
-  const mm = project ? mirrorMapping(project, master.dp.part, slave.dp.part, master.dp.item, slave.dp.item) : null;
+  const mm = mirrorMapping(master.dp.part, slave.dp.part, master.st.points, slave.st.points);
   if (mm && slave.st.points?.length > 1 && masterAll.length) {
     const c = curve(slave.st.points, slave.st.closed);
     const images = masterAll.map((h) => ({ ...mm.map(h), tangent: mm.angle(h.tangent), angle: mm.angle(h.angle), anchor: h.anchor }));

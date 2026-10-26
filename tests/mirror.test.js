@@ -139,13 +139,24 @@ test("mirror joint: erasing a hole on the source removes its mirror image on the
   assert.equal(hc.length, hs.length);
   assert.ok(d0.joints[0].mirrored, "mirror pairing used");
   const image = (h) => { const q = reflectPoint(h, axis.a, axis.b); return { x: q.x, y: q.y + 70 }; };
-  for (let i = 0; i < hs.length; i++) assert.ok(d2(image(hs[i]), hc[i]) < 1e-6, `copy hole ${i} is the mirror image of source hole ${i}`);
+  // 1e-3: the mirror translation is read off the inset rings' area centroids (Clipper rounds to 1e-4 mm).
+  for (let i = 0; i < hs.length; i++) assert.ok(d2(image(hs[i]), hc[i]) < 1e-3, `copy hole ${i} is the mirror image of source hole ${i}: ${d2(image(hs[i]), hc[i])}`);
   // Erase a hole near the disc junction on the source → the copy loses the image of that hole.
   const victim = hs[Math.floor(hs.length * 0.3)];
   src.stitchLines[0].skipped = [{ u: victim.s / d0.parts[0].stitch[0].result.length }];
   const d1 = deriveProject(mk());
   const hc1 = d1.parts[1].stitch[0].holes;
   assert.equal(hc1.length, hc.length - 1);
-  assert.ok(!hc1.some((h) => d2(h, image(victim)) < 1e-6), "the image of the erased hole is gone");
-  assert.ok(hc1.every((h) => hc.some((g) => d2(g, h) < 1e-6)), "no other copy hole moved");
+  assert.ok(!hc1.some((h) => d2(h, image(victim)) < 1e-3), "the image of the erased hole is gone");
+  assert.ok(hc1.every((h) => hc.some((g) => d2(g, h) < 1e-3)), "no other copy hole moved");
+  // Now punch a window out of the moved copy with a boolean: the result is a
+  // new item at the origin. Pairing must still be by mirror image.
+  const window = { id: "win", type: "circle", name: "w", x: movedCopy.x + 100, y: movedCopy.y + 10, w: 20, h: 20, rotation: 0, layerId: "L", contours: shapeContours("circle", 20, 20) };
+  const cut = { id: "cut", type: "outline", name: "cut", x: 0, y: 0, rotation: 0, layerId: "L", ratioLocked: false, contours: booleanContours([movedCopy, window], "difference") };
+  copy.itemId = "cut";
+  const d2_ = deriveProject(project([item, cut], { parts: [src, copy], joints }));
+  assert.ok(d2_.joints[0].mirrored, "still mirror pairing after the boolean");
+  const hc2 = d2_.parts[1].stitch[0].holes;
+  assert.equal(hc2.length, hc.length - 1);
+  assert.ok(!hc2.some((h) => d2(h, image(victim)) < 1e-3), "the image of the erased hole is gone on the cut copy too");
 });
