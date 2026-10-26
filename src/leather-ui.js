@@ -54,7 +54,7 @@ export function createLeatherUI(ctx) {
     });
     for (const k of [...cache.keys()]) if (!seen.has(k)) cache.delete(k);
     resolveProjected(parts);
-    const joints = l.joints.map((j) => deriveJoint(j, parts));
+    const joints = l.joints.map((j) => deriveJoint(j, parts, p));
     for (const dj of joints) {
       if (dj.error) continue;
       if (dj.masterHoles && dj.masterHoles.length !== dj.master.holes.length) dj.master.holes = dj.masterHoles;

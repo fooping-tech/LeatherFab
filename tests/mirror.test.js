@@ -117,3 +117,35 @@ test("mirror link: hardware is reflected into the copy, source edits propagate, 
   assert.equal(linked.parts.length, 1);
   assert.equal(linked.parts[0].mirrorOf, undefined);
 });
+
+import { reflectPoint } from "../src/cad.js";
+const d2 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+import { booleanContours } from "../src/operations.js";
+
+test("mirror joint: erasing a hole on the source removes its mirror image on the copy, even after the copy was moved", () => {
+  // Asymmetric source like the user's: a bar with a disc on the left.
+  const bar = { id: "bar", type: "rect", name: "bar", x: 0, y: 20, w: 120, h: 20, radius: 10, rotation: 0, layerId: "L", ratioLocked: false, contours: shapeContours("rect", 120, 20, 10) };
+  const disc = { id: "disc", type: "circle", name: "disc", x: 10, y: 9, w: 42, h: 42, rotation: 0, layerId: "L", contours: shapeContours("circle", 42, 42) };
+  const contours = booleanContours([bar, disc], "union");
+  const item = { id: "a", type: "outline", name: "a", x: 0, y: 0, rotation: 0, layerId: "L", ratioLocked: false, contours };
+  const src = makePart("p", "a", { stitchLines: [makeStitchLine("s", { offset: 2, pattern: { pitch: 4, spacing: "chord", shape: "diamond", angle: 30 } })] });
+  const axis = { a: { x: 140, y: 0 }, b: { x: 140, y: 1 } };
+  const [copyItem] = mirrorItems([item], axis.a, axis.b, uid);
+  const { copy, joints } = createMirrorPart(src, item, copyItem, axis, uid);
+  const movedCopy = { ...copyItem, y: copyItem.y + 70 }; // laid out below, like the user's board
+  const mk = () => project([item, movedCopy], { parts: [src, copy], joints });
+  const d0 = deriveProject(mk());
+  const hs = d0.parts[0].stitch[0].holes, hc = d0.parts[1].stitch[0].holes;
+  assert.equal(hc.length, hs.length);
+  assert.ok(d0.joints[0].mirrored, "mirror pairing used");
+  const image = (h) => { const q = reflectPoint(h, axis.a, axis.b); return { x: q.x, y: q.y + 70 }; };
+  for (let i = 0; i < hs.length; i++) assert.ok(d2(image(hs[i]), hc[i]) < 1e-6, `copy hole ${i} is the mirror image of source hole ${i}`);
+  // Erase a hole near the disc junction on the source → the copy loses the image of that hole.
+  const victim = hs[Math.floor(hs.length * 0.3)];
+  src.stitchLines[0].skipped = [{ u: victim.s / d0.parts[0].stitch[0].result.length }];
+  const d1 = deriveProject(mk());
+  const hc1 = d1.parts[1].stitch[0].holes;
+  assert.equal(hc1.length, hc.length - 1);
+  assert.ok(!hc1.some((h) => d2(h, image(victim)) < 1e-6), "the image of the erased hole is gone");
+  assert.ok(hc1.every((h) => hc.some((g) => d2(g, h) < 1e-6)), "no other copy hole moved");
+});
