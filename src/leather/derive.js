@@ -290,7 +290,8 @@ export function deriveJoint(joint, derivedParts, project = null) {
   if (slaveHoles.length === count && count > 0) {
     const slaveCurve = curve(slave.st.points, slave.st.closed);
     const masterSkipped = new Set((master.st.skippedHoles ?? []).map((h) => h.index));
-    const slaveSkipped = new Set(applySkips(slaveHoles, slave.st.line, slaveResult).skippedHoles.map((h) => h.index));
+    // A mirrored copy's own skips are ignored (it has none while linked).
+    const slaveSkipped = mirrored ? new Set() : new Set(applySkips(slaveHoles, slave.st.line, slaveResult).skippedHoles.map((h) => h.index));
     const keepA = new Set(), keepB = new Set();
     for (let i = 0; i < count; i++) {
       const j = joint.reverse ? count - 1 - i : i;

@@ -657,6 +657,7 @@ ${rows}
   function eraseAt(p, mmPerPx, extend = false) {
     const t = nearestHole(p, Math.max(mmPerPx * 14, 1.5));
     if (!t) return ctx.notify("縫い穴の上をタップしてください。ドラッグで囲むとまとめて消せます。");
+    if (t.part.mirrorOf) return ctx.notify("ミラーコピーの穴は、元のパーツ側で消してください（鏡像の穴が一緒に消えます）。コピーだけで消したい場合は、パネルで「リンクを解除」してから行います。");
     // Shift / multi-select: erase the run from the last erased hole to this one.
     if (extend && t.kind === "hole" && lastErased && lastErased.lineId === t.st.line.id && lastErased.partId === t.part.id) {
       const L = t.st.result.length, closed = t.st.closed;
@@ -691,8 +692,9 @@ ${rows}
   // Marquee: every hole inside the rectangle is erased (ghosts inside are restored).
   function eraseInRect(a, b) {
     const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
-    const hits = holeTargets().filter((t) => t.x >= x0 && t.x <= x1 && t.y >= y0 && t.y <= y1);
-    if (!hits.length) return ctx.notify("囲んだ範囲に縫い穴がありません。");
+    const all = holeTargets().filter((t) => t.x >= x0 && t.x <= x1 && t.y >= y0 && t.y <= y1);
+    const hits = all.filter((t) => !t.part.mirrorOf);
+    if (!hits.length) return ctx.notify(all.length ? "ミラーコピーの穴は元のパーツ側で消してください（鏡像が一緒に消えます）。" : "囲んだ範囲に縫い穴がありません。");
     mutate(() => {
       let erased = 0, restored = 0;
       for (const t of hits) {
