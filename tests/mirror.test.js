@@ -122,7 +122,7 @@ import { reflectPoint } from "../src/cad.js";
 const d2 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 import { booleanContours } from "../src/operations.js";
 
-test("mirror joint: erasing a hole on the source removes its mirror image on the copy, even after the copy was moved", () => {
+test("mirror joint: erasing a hole on the source removes its mirror image on the copy, even after the copy was moved", async () => {
   // Asymmetric source like the user's: a bar with a disc on the left.
   const bar = { id: "bar", type: "rect", name: "bar", x: 0, y: 20, w: 120, h: 20, radius: 10, rotation: 0, layerId: "L", ratioLocked: false, contours: shapeContours("rect", 120, 20, 10) };
   const disc = { id: "disc", type: "circle", name: "disc", x: 10, y: 9, w: 42, h: 42, rotation: 0, layerId: "L", contours: shapeContours("circle", 42, 42) };
@@ -149,6 +149,15 @@ test("mirror joint: erasing a hole on the source removes its mirror image on the
   assert.equal(hc1.length, hc.length - 1);
   assert.ok(!hc1.some((h) => d2(h, image(victim)) < 5e-3), "the image of the erased hole is gone");
   assert.ok(hc1.every((h) => hc.some((g) => d2(g, h) < 5e-3)), "no other copy hole moved");
+  // The link sync must not copy the erasure onto the copy (its own loop
+  // positions differ): after a sync the copy has no `skipped`, and exactly one
+  // hole is missing on each side.
+  const { syncMirrorParts: sync } = await import("../src/leather/mirror.js");
+  sync({ ...mk(), leather: { ...emptyLeather(), parts: [src, copy], joints } }, uid);
+  assert.equal(copy.stitchLines[0].skipped, undefined, "skips are not synced onto the copy");
+  const dSync = deriveProject(mk());
+  assert.equal(dSync.parts[0].stitch[0].holes.length, hs.length - 1);
+  assert.equal(dSync.parts[1].stitch[0].holes.length, hs.length - 1);
   // Now punch a window out of the moved copy with a boolean: the result is a
   // new item at the origin. Pairing must still be by mirror image.
   // A window well inside the bar (the bar spans local y 11..31 of the copy).
