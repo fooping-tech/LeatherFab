@@ -36,7 +36,16 @@ export function mirrorHardware(list, srcItem, copyItem, axis, existing = [], mak
 export function mirroredSettings(src, srcItem, copyItem, axis, existing, makeId) {
   return {
     // Projected lines are not mirrored (their source sits on another part).
-    stitchLines: src.stitchLines.filter((line) => line.source.kind !== "projected").map((line, k) => makeStitchLine(existing?.stitchLines[k]?.id ?? makeId(), { ...structuredClone(line), pattern: { ...line.pattern, flip: !line.pattern.flip } })),
+    // Erased holes (`skipped`) are not copied: positions along the copy's
+    // loop do not correspond, and the joint already drops the mirror image
+    // of every erased hole. The copy keeps its own erasures.
+    stitchLines: src.stitchLines
+      .filter((line) => line.source.kind !== "projected")
+      .map((line, k) => {
+        const { skipped, ...rest } = structuredClone(line);
+        const keep = existing?.stitchLines[k]?.skipped;
+        return makeStitchLine(existing?.stitchLines[k]?.id ?? makeId(), { ...rest, pattern: { ...line.pattern, flip: !line.pattern.flip }, ...(keep ? { skipped: keep } : {}) });
+      }),
     foldLines: src.foldLines.map((f, k) => makeFoldLine(existing?.foldLines[k]?.id ?? makeId(), structuredClone(f))),
     hardware: mirrorHardware(src.hardware, srcItem, copyItem, axis, existing?.hardware ?? [], makeId),
   };
