@@ -15,6 +15,14 @@ import { MATERIALS } from "./model.js";
 import { implicitMirrorJoints } from "./mirror.js";
 
 const issue = (level, message, extra = {}) => ({ level, message, ...extra });
+// Where a line's erased-hole records sit: the same frame placeHoles reports
+// hole arc lengths in (the line's own start and direction), so a ghost is
+// drawn exactly where the matching hole was left out.
+export function ghostsOf(line, points, closed) {
+  if (!line.skipped?.length || !points || points.length < 2) return [];
+  const c = curve(points, closed);
+  return line.skipped.map((k) => ({ ...pointAt(c, k.u * c.length), skip: k }));
+}
 // Applies a line's `skipped` list to placed holes: for each recorded
 // position the nearest hole (within 0.6 pitch) is marked skipped. Returns
 // { holes (kept), skippedHoles, orphans (skips that matched nothing) }.
@@ -186,7 +194,7 @@ export function derivePart(project, part) {
     const sk = applySkips(allHoles, line, result);
     for (const w of result.warnings) d.issues.push(issue("warning", `縫い線「${line.name}」: ${w}`, { partId: part.id, lineId: line.id }));
     if (sk.orphans.length) d.issues.push(issue("warning", `縫い線「${line.name}」: 消した穴の記録 ${sk.orphans.length} 件が現在の穴と対応しません（ピッチや形が大きく変わりました）。`, { partId: part.id, lineId: line.id }));
-    d.stitch.push({ line, points: g.points, closed: g.closed, result, holes: sk.holes, allHoles, skippedHoles: sk.skippedHoles, symmetry: sym.axes.map((a) => a.axis) });
+    d.stitch.push({ line, points: g.points, closed: g.closed, result, holes: sk.holes, allHoles, skippedHoles: sk.skippedHoles, symmetry: sym.axes.map((a) => a.axis), ghosts: ghostsOf(line, g.points, g.closed) });
   }
   for (const fold of part.foldLines) {
     if (fold.source.kind === "projected") continue;
@@ -369,7 +377,7 @@ export function deriveJoint(joint, derivedParts, project = null) {
     if (mirrored) maxDeviation = 0; // images by construction
     if (maxDeviation > 1) issues.push(issue("warning", `縫合「${joint.name}」: 穴位置の最大ずれ ${maxDeviation.toFixed(2)} mm（縫い合わせると革がよれる可能性があります）。`, { jointId: joint.id }));
   }
-  return { joint, master: master.st, slave: slave.st, masterHoles: masterKept, slaveHoles: slaveKept, slaveResult, adjusted: adjusted || aligned || mirrored, aligned, mirrored, count, lengthDiff, maxDeviation, pairs, issues };
+  return { joint, master: master.st, slave: slave.st, masterHoles: masterKept, slaveHoles: slaveKept, slaveAll: slaveHoles, slaveResult, adjusted: adjusted || aligned || mirrored, aligned, mirrored, count, lengthDiff, maxDeviation, pairs, issues };
 }
 // Composition of a part item's world transform with a placement given in
 // that item's local frame: the virtual item where the source part sat.
@@ -416,7 +424,7 @@ function deriveProjected(project, d, st, parts) {
     holes.push({ ...h, contour: holeContour(h, sl.line.pattern) });
   }
   const sk = applySkips(holes, st.line, result);
-  Object.assign(st, { points: g.points, closed: g.closed, result, holes: sk.holes, allHoles: holes, skippedHoles: sk.skippedHoles, sourcePart: sp.part, sourceLine: sl.line, dropped });
+  Object.assign(st, { points: g.points, closed: g.closed, result, holes: sk.holes, allHoles: holes, skippedHoles: sk.skippedHoles, sourcePart: sp.part, sourceLine: sl.line, dropped, ghosts: ghostsOf(st.line, g.points, g.closed) });
   if (dropped) d.issues.push(issue("warning", `縫い線「${st.line.name}」: 投影した穴のうち ${dropped} 個がこのパーツの外にあるため省きました。`, { partId: d.part.id, lineId: st.line.id }));
   if (!holes.length) d.issues.push(issue("warning", `縫い線「${st.line.name}」: 投影した穴がこのパーツに1つもかかっていません。`, { partId: d.part.id, lineId: st.line.id }));
   return null;
@@ -503,6 +511,7 @@ export function deriveProject(project) {
     if (dj.masterHoles && dj.masterHoles.length !== dj.master.holes.length) dj.master.holes = dj.masterHoles;
     if (dj.adjusted || (dj.slaveHoles && dj.slaveHoles.length !== dj.slave.holes.length)) {
       dj.slave.holes = dj.slaveHoles;
+      dj.slave.allHoles = dj.slaveAll;
       dj.slave.result = dj.slaveResult;
       if (dj.adjusted) dj.slave.joined = dj.joint.id;
     }

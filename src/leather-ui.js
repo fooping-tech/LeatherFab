@@ -16,7 +16,6 @@ import {
 } from "./leather/model.js";
 import { HOLE_SHAPES, SPACINGS, FITS, CORNER_MODES, SYMMETRIES, PITCH_PRESETS, PATTERN_LIMITS, DEFAULT_PATTERN, spiOf } from "./leather/stitch.js";
 import { derivePart, deriveJoint, checkParts, outlinePath, relativePlacement, composePlacement, finishDerivation as deriveProjectForProjected } from "./leather/derive.js";
-import { curve as makeCurve, pointAt as curvePointAt } from "./leather/polyline.js";
 import { operationGeometry, applyKerf, checkManufacturing, exportLeatherSVG, manufacturingSummary, OPERATION_COLORS, OPERATION_ORDER } from "./leather/manufacturing.js";
 import { HARDWARE_PRESETS, HARDWARE_TYPES, presetById } from "./leather/hardware.js";
 import { TEMPLATES } from "./leather/templates.js";
@@ -60,6 +59,7 @@ export function createLeatherUI(ctx) {
       if (dj.masterHoles && dj.masterHoles.length !== dj.master.holes.length) dj.master.holes = dj.masterHoles;
       if (dj.adjusted || (dj.slaveHoles && dj.slaveHoles.length !== dj.slave.holes.length)) {
         dj.slave.holes = dj.slaveHoles;
+        dj.slave.allHoles = dj.slaveAll;
         dj.slave.result = dj.slaveResult;
         if (dj.adjusted) dj.slave.joined = dj.joint.id;
       }
@@ -637,11 +637,7 @@ ${rows}
       for (const st of dp.stitch) {
         if (st.error || !st.result) continue;
         for (const h of st.holes) out.push({ kind: "hole", x: h.x, y: h.y, part: dp.part, st, u: st.result.length ? h.s / st.result.length : 0 });
-        const c = st.points?.length > 1 ? makeCurve(st.points, st.closed) : null;
-        for (const k of st.line.skipped ?? []) {
-          const p = c ? curvePointAt(c, k.u * c.length) : null;
-          if (p) out.push({ kind: "ghost", x: p.x, y: p.y, part: dp.part, st, skip: k });
-        }
+        for (const g of st.ghosts ?? []) out.push({ kind: "ghost", x: g.x, y: g.y, part: dp.part, st, skip: g.skip });
         // Mirror images of holes erased on the source part.
         for (const g of st.pairedGhosts ?? []) out.push({ kind: "ghost-pair", x: g.x, y: g.y, part: dp.part, st, source: g });
       }
