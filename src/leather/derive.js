@@ -341,8 +341,10 @@ export function deriveJoint(joint, derivedParts, project = null) {
       const j = joint.reverse ? count - 1 - i : i;
       const u = lenA > 0 ? masterAll[i].s / lenA : 0;
       const expectedS = joint.reverse ? lenB * (1 - u) : lenB * u;
-      let dev = Math.abs(slaveHoles[j].s - expectedS);
-      if (slave.st.closed) dev = Math.min(dev, lenB - dev);
+      // Stacked (aligned) lines: the pieces lie on top of each other, so the
+      // deviation is simply the distance between the paired holes.
+      let dev = aligned ? Math.hypot(slaveHoles[j].x - masterAll[i].x, slaveHoles[j].y - masterAll[i].y) : Math.abs(slaveHoles[j].s - expectedS);
+      if (!aligned && slave.st.closed) dev = Math.min(dev, lenB - dev);
       maxDeviation = Math.max(maxDeviation, dev);
       const erased = masterSkipped.has(masterAll[i].index) || slaveSkipped.has(slaveHoles[j].index);
       if (erased) continue;
@@ -352,6 +354,17 @@ export function deriveJoint(joint, derivedParts, project = null) {
     }
     masterKept = masterAll.filter((h) => keepA.has(h));
     slaveKept = slaveHoles.filter((h) => keepB.has(h));
+    // Holes dropped on the slave because their partner was erased on the
+    // master: shown as ghosts on the slave; tapping one restores the master's.
+    const Lm = lenA;
+    slave.st.pairedGhosts = slaveHoles
+      .filter((h) => !keepB.has(h))
+      .map((h, k) => {
+        const j = slaveHoles.indexOf(h);
+        const i = joint.reverse ? count - 1 - j : j;
+        return { x: h.x, y: h.y, sourcePartId: master.dp.part.id, sourceLineId: master.st.line.id, u: Lm > 0 ? masterAll[i].s / Lm : 0 };
+      })
+      .filter((g) => masterSkipped.has(masterAll[joint.reverse ? count - 1 - slaveHoles.findIndex((h) => h.x === g.x && h.y === g.y) : slaveHoles.findIndex((h) => h.x === g.x && h.y === g.y)]?.index));
     if (mirrored) maxDeviation = 0; // images by construction
     if (maxDeviation > 1) issues.push(issue("warning", `縫合「${joint.name}」: 穴位置の最大ずれ ${maxDeviation.toFixed(2)} mm（縫い合わせると革がよれる可能性があります）。`, { jointId: joint.id }));
   }
