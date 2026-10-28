@@ -306,10 +306,21 @@ export function placeHoles(points, patternIn, { closed = undefined } = {}) {
     warnings.push("始点と終点で重なる穴を1つ省きました。");
   }
   const sign = (pattern.reverse ? -1 : 1) * (pattern.flip ? -1 : 1);
+  // Hole arc lengths are reported in the frame of the line as given (its
+  // own start and direction), not of the rotated / reversed working curve,
+  // so erased-hole records (u = s / L) and ghost markers stay consistent
+  // whatever start offset or symmetry the placement used.
+  const L = c.length;
+  const shift = c.closed ? pattern.startOffset : 0;
+  const original = (s) => {
+    let v = pattern.reverse ? L - (s + shift) : s + shift;
+    if (c.closed) v = ((v % L) + L) % L;
+    return v;
+  };
   const holes = kept.map((h, index) => {
     const t = tangentAt(c, h.s);
     const tangent = (Math.atan2(t.y, t.x) * 180) / Math.PI;
-    return { index, x: h.point.x, y: h.point.y, s: h.s, tangent, angle: tangent + sign * pattern.angle, anchor: h.anchor };
+    return { index, x: h.point.x, y: h.point.y, s: original(h.s), tangent, angle: tangent + sign * pattern.angle, anchor: h.anchor };
   });
   // Achieved pitch statistics over neighbouring holes (chord and arc).
   const chords = holes.slice(1).map((h, k) => dist(holes[k], h));

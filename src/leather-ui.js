@@ -642,6 +642,8 @@ ${rows}
           const p = c ? curvePointAt(c, k.u * c.length) : null;
           if (p) out.push({ kind: "ghost", x: p.x, y: p.y, part: dp.part, st, skip: k });
         }
+        // Mirror images of holes erased on the source part.
+        for (const g of st.pairedGhosts ?? []) out.push({ kind: "ghost-pair", x: g.x, y: g.y, part: dp.part, st, source: g });
       }
     }
     return out;
@@ -657,6 +659,17 @@ ${rows}
   function eraseAt(p, mmPerPx, extend = false) {
     const t = nearestHole(p, Math.max(mmPerPx * 14, 1.5));
     if (!t) return ctx.notify("縫い穴の上をタップしてください。ドラッグで囲むとまとめて消せます。");
+    if (t.kind === "ghost-pair") {
+      // Restore the source hole whose image this is.
+      return mutate(() => {
+        const line = partById(t.source.sourcePartId)?.stitchLines.find((l) => l.id === t.source.sourceLineId);
+        if (!line?.skipped) return;
+        let best = null;
+        for (const k of line.skipped) { const d = Math.abs(k.u - t.source.u); if (!best || d < best.d) best = { k, d }; }
+        if (best) line.skipped = line.skipped.filter((k) => k !== best.k);
+        if (!line.skipped.length) delete line.skipped;
+      }, "元のパーツの穴を戻しました（鏡像も戻ります）。");
+    }
     if (t.part.mirrorOf) return ctx.notify("ミラーコピーの穴は、元のパーツ側で消してください（鏡像の穴が一緒に消えます）。コピーだけで消したい場合は、パネルで「リンクを解除」してから行います。");
     // Shift / multi-select: erase the run from the last erased hole to this one.
     if (extend && t.kind === "hole" && lastErased && lastErased.lineId === t.st.line.id && lastErased.partId === t.part.id) {
@@ -703,7 +716,7 @@ ${rows}
         if (t.kind === "hole") {
           line.skipped = [...(line.skipped ?? []), { u: Number(t.u.toFixed(6)) }];
           erased++;
-        } else {
+        } else if (t.kind === "ghost") {
           line.skipped = (line.skipped ?? []).filter((k) => Math.abs(k.u - t.skip.u) > 1e-9);
           if (!line.skipped.length) delete line.skipped;
           restored++;
@@ -904,8 +917,9 @@ ${historyPanel(part, item)}
     }
     if (ctx.tool() === "hole-erase") {
       for (const t of holeTargets())
-        if (t.kind === "ghost") html += `<circle cx="${t.x}" cy="${t.y}" r="${thin * 3}" fill="none" stroke="#b3453b" stroke-width="${thin}" stroke-dasharray="${thin * 1.5} ${thin}" pointer-events="none"/>`;
+        if (t.kind === "ghost" || t.kind === "ghost-pair") html += `<circle cx="${t.x}" cy="${t.y}" r="${thin * 3}" fill="none" stroke="${t.kind === "ghost" ? "#b3453b" : "#c98a3a"}" stroke-width="${thin}" stroke-dasharray="${thin * 1.5} ${thin}" pointer-events="none"/>`;
       if (holeHover) html += `<circle cx="${holeHover.x}" cy="${holeHover.y}" r="${thin * 5}" fill="${holeHover.kind === "hole" ? "#b3453b" : "#2f9e5f"}" fill-opacity="0.25" stroke="${holeHover.kind === "hole" ? "#b3453b" : "#2f9e5f"}" stroke-width="${thin}" pointer-events="none"/>`;
+      void 0;
     }
     if (seamFirst) {
       const pts = edgeOutline(seamFirst.e);

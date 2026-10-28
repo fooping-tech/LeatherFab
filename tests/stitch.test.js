@@ -87,7 +87,8 @@ test("closed loop start offset and reverse", () => {
   const ring = circle(10);
   const base = placeHoles(ring, { ...DEFAULT_PATTERN, pitch: 4, spacing: "arc" });
   const shifted = placeHoles(ring, { ...DEFAULT_PATTERN, pitch: 4, spacing: "arc", startOffset: 2 });
-  assert.ok(close(shifted.holes[0].s, 0) && close(d(shifted.holes[0], pointAt(curve(ring, true), 2)), 0, 1e-6));
+  // Hole arc lengths are reported in the line's own frame: the first hole sits 2 mm from the ring start.
+  assert.ok(close(shifted.holes[0].s, 2) && close(d(shifted.holes[0], pointAt(curve(ring, true), 2)), 0, 1e-6));
   assert.ok(!close(base.holes[0].x, shifted.holes[0].x, 1e-3));
   const rev = placeHoles(ring, { ...DEFAULT_PATTERN, pitch: 4, spacing: "arc", reverse: true });
   assert.equal(rev.holes.length, 16);
