@@ -105,6 +105,49 @@ export function resolveLine(item, path, line, ring) {
   if (!off) return { error: `オフセット ${line.offset} mm で輪郭が消えました。距離を小さくしてください。` };
   return { points: off, closed: run.closed };
 }
+// Symmetry axes (item-local vertical / horizontal through the bbox centre)
+// that map the closed world ring onto itself within 0.05 mm, with the arc
+// length where each axis first crosses the ring. Returns [] when none.
+export function symmetryAxes(points, item) {
+  if (!isClosedPolyline(points) || points.length < 8) return [];
+  const local = points.map((p) => transform(p, item, true));
+  const xs = local.map((q) => q.x), ys = local.map((q) => q.y);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const c = curve(points, true);
+  const out = [];
+  const step = Math.max(1, Math.floor(local.length / 120));
+  for (const axis of ["vertical", "horizontal"]) {
+    const mirror = (q) => (axis === "vertical" ? { x: 2 * cx - q.x, y: q.y } : { x: q.x, y: 2 * cy - q.y });
+    let ok = true;
+    for (let i = 0; i < local.length && ok; i += step) if (nearestOnPolyline(local, mirror(local[i])).d > 0.05) ok = false;
+    if (!ok) continue;
+    // First crossing of the axis (topmost for vertical, leftmost for horizontal).
+    let best = null;
+    for (let i = 0; i + 1 < local.length; i++) {
+      const a = local[i], b = local[i + 1];
+      const fa = axis === "vertical" ? a.x - cx : a.y - cy, fb = axis === "vertical" ? b.x - cx : b.y - cy;
+      if (fa === 0 || fa * fb < 0) {
+        const t = fa === 0 ? 0 : fa / (fa - fb);
+        const q = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+        const key = axis === "vertical" ? q.y : q.x;
+        if (!best || key < best.key) best = { key, s: c.s[i] + t * (c.s[i + 1] - c.s[i]) };
+      }
+    }
+    if (best) out.push({ axis, s: best.s });
+  }
+  return out;
+}
+// The pattern actually used for a closed line: with symmetry on, the start
+// moves to the axis crossing and a doubly symmetric part gets an even count.
+export function symmetricPattern(line, points, item) {
+  const p = line.pattern;
+  if (!p || p.symmetry === "none" || !isClosedPolyline(points)) return { pattern: p, axes: [] };
+  const axes = symmetryAxes(points, item).filter((a) => p.symmetry === "auto" || a.axis === p.symmetry);
+  if (!axes.length) return { pattern: p, axes: [] };
+  const chosen = axes.find((a) => a.axis === "vertical") ?? axes[0];
+  // The traversal may run the other way: startOffset counts along the line.
+  return { pattern: { ...p, startOffset: p.reverse ? totalLength(points) - chosen.s : chosen.s, evenCount: axes.length === 2 }, axes };
+}
 export function derivePart(project, part) {
   const item = project.items.find((i) => i.id === part.itemId);
   const d = { part, item: item ?? null, outline: [], ring: null, stitch: [], folds: [], hardware: [], issues: [] };
@@ -136,12 +179,13 @@ export function derivePart(project, part) {
       d.stitch.push({ line, error: g.error, holes: [] });
       continue;
     }
-    const result = placeHoles(g.points, line.pattern, { closed: g.closed });
+    const sym = symmetricPattern(line, g.points, item);
+    const result = placeHoles(g.points, sym.pattern, { closed: g.closed });
     const allHoles = result.holes.map((h) => ({ ...h, contour: holeContour(h, line.pattern) }));
     const sk = applySkips(allHoles, line, result);
     for (const w of result.warnings) d.issues.push(issue("warning", `縫い線「${line.name}」: ${w}`, { partId: part.id, lineId: line.id }));
     if (sk.orphans.length) d.issues.push(issue("warning", `縫い線「${line.name}」: 消した穴の記録 ${sk.orphans.length} 件が現在の穴と対応しません（ピッチや形が大きく変わりました）。`, { partId: part.id, lineId: line.id }));
-    d.stitch.push({ line, points: g.points, closed: g.closed, result, holes: sk.holes, allHoles, skippedHoles: sk.skippedHoles });
+    d.stitch.push({ line, points: g.points, closed: g.closed, result, holes: sk.holes, allHoles, skippedHoles: sk.skippedHoles, symmetry: sym.axes.map((a) => a.axis) });
   }
   for (const fold of part.foldLines) {
     if (fold.source.kind === "projected") continue;
@@ -346,7 +390,7 @@ function deriveProjected(project, d, st, parts) {
   const ring = sub ? toWorld(pathContours([{ ...sub, closed: true }])[0] ?? [], virtual) : null;
   const g = resolveLine(virtual, path, sl.line, ring);
   if (g.error) return g.error;
-  const result = placeHoles(g.points, sl.line.pattern, { closed: g.closed });
+  const result = placeHoles(g.points, symmetricPattern(sl.line, g.points, virtual).pattern, { closed: g.closed });
   const outer = d.ring;
   let dropped = 0;
   const holes = [];

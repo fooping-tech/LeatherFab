@@ -14,7 +14,7 @@ import {
   ensureLeather, makePart, makeStitchLine, makeFoldLine, makeHardware, makeJoint, partOfItem, remapItems, rebaseItemFrames,
   MATERIALS, LASER_LABELS, LIMITS, OPERATIONS, OPERATION_LABELS, DEFAULT_OFFSET,
 } from "./leather/model.js";
-import { HOLE_SHAPES, SPACINGS, FITS, CORNER_MODES, PITCH_PRESETS, PATTERN_LIMITS, DEFAULT_PATTERN, spiOf } from "./leather/stitch.js";
+import { HOLE_SHAPES, SPACINGS, FITS, CORNER_MODES, SYMMETRIES, PITCH_PRESETS, PATTERN_LIMITS, DEFAULT_PATTERN, spiOf } from "./leather/stitch.js";
 import { derivePart, deriveJoint, checkParts, outlinePath, relativePlacement, composePlacement, finishDerivation as deriveProjectForProjected } from "./leather/derive.js";
 import { curve as makeCurve, pointAt as curvePointAt } from "./leather/polyline.js";
 import { operationGeometry, applyKerf, checkManufacturing, exportLeatherSVG, manufacturingSummary, OPERATION_COLORS, OPERATION_ORDER } from "./leather/manufacturing.js";
@@ -249,7 +249,7 @@ export function createLeatherUI(ctx) {
             const base = HOLE_SHAPES[value];
             if (base) Object.assign(line.pattern, makeStitchLine(line.id, { ...line, pattern: { ...line.pattern, shape: value, width: base.width, length: base.length, angle: base.angle } }).pattern);
           } else {
-            const v = ["spacing", "fit", "corner"].includes(key) ? value : ["reverse", "flip"].includes(key) ? Boolean(value) : Number(value);
+            const v = ["spacing", "fit", "corner", "symmetry"].includes(key) ? value : ["reverse", "flip"].includes(key) ? Boolean(value) : Number(value);
             Object.assign(line, makeStitchLine(line.id, { ...line, pattern: { ...line.pattern, [key]: v } }));
           }
         } else if (fold) {
@@ -755,7 +755,7 @@ ${rows}
     if (!st || st.error) return `<p class="leather-error">${esc(st?.error ?? "計算できません")}</p>`;
     const r = st.result;
     const dev = r.pitch.target ? Math.abs(r.pitch.mean - r.pitch.target) / r.pitch.target : 0;
-    return `<dl class="measure leather-stats"><dt>穴数</dt><dd><b>${st.holes.length}</b>${st.skippedHoles?.length ? ` （消した穴 ${st.skippedHoles.length}）` : ""}${st.joined ? " · 縫合で穴数を合わせています" : ""}</dd><dt>実ピッチ（弦長）</dt><dd class="${dev > st.line.pattern.maxDeviation ? "warn" : ""}">${num(r.pitch.mean)} mm（${num(r.pitch.min)}〜${num(r.pitch.max)}）· ${num(spiOf(r.pitch.mean || st.line.pattern.pitch), 1)} SPI</dd><dt>縫い線の長さ</dt><dd>${num(r.length, 1)} mm${r.closed ? "（閉）" : ""} · 区間 ${r.spans.length} · 角 ${r.corners ?? 0}</dd></dl>${r.warnings.length ? `<ul class="leather-warnings">${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}`;
+    return `<dl class="measure leather-stats"><dt>穴数</dt><dd><b>${st.holes.length}</b>${st.skippedHoles?.length ? ` （消した穴 ${st.skippedHoles.length}）` : ""}${st.joined ? " · 縫合で穴数を合わせています" : ""}</dd><dt>実ピッチ（弦長）</dt><dd class="${dev > st.line.pattern.maxDeviation ? "warn" : ""}">${num(r.pitch.mean)} mm（${num(r.pitch.min)}〜${num(r.pitch.max)}）· ${num(spiOf(r.pitch.mean || st.line.pattern.pitch), 1)} SPI</dd><dt>縫い線の長さ</dt><dd>${num(r.length, 1)} mm${r.closed ? "（閉）" : ""} · 区間 ${r.spans.length} · 角 ${r.corners ?? 0}</dd>${st.symmetry?.length ? `<dt>対称</dt><dd>${st.symmetry.map((a) => (a === "vertical" ? "左右" : "上下")).join("・")}対称に配置（開始点を対称軸上に）</dd>` : st.line.pattern.symmetry !== "none" && r.closed ? `<dt>対称</dt><dd class="warn">対称軸が見つかりません（外形が非対称）</dd>` : ""}</dl>${r.warnings.length ? `<ul class="leather-warnings">${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}`;
   }
   function stitchBlock(part, line, st) {
     const f = (key) => `stitch|${part.id}|${line.id}|${key}`;
@@ -770,7 +770,7 @@ ${rows}
 <div class="fields">${numField(f("pitch"), "ピッチ", p.pitch, 0.05, PATTERN_LIMITS.pitch)}<label>間隔の基準${sel(f("spacing"), SPACINGS, p.spacing)}</label></div>
 <div class="fields"><label>配置${sel(f("fit"), FITS, p.fit)}</label>${p.fit === "count" ? numField(f("count"), "穴数", p.count, 1, PATTERN_LIMITS.count, "") : numField(f("maxDeviation"), "許容ずれ", p.maxDeviation * 100, 1, [0, 50], "%")}</div>
 <h5>穴の形</h5><div class="fields"><label>形状${sel(f("shape"), HOLE_SHAPES, p.shape)}</label>${numField(f("angle"), "角度", p.angle, 1, PATTERN_LIMITS.angle, "°")}${numField(f("width"), "幅", p.width, 0.1, PATTERN_LIMITS.width)}${numField(f("length"), "長さ", p.length, 0.1, PATTERN_LIMITS.length)}</div>
-<h5>角と端</h5><div class="fields"><label>角の処理${sel(f("corner"), CORNER_MODES, p.corner)}</label>${numField(f("cornerAngle"), "角とみなす角度", p.cornerAngle, 5, PATTERN_LIMITS.cornerAngle, "°")}${line.source.from === null || line.source.from === line.source.to ? numField(f("startOffset"), "開始位置", p.startOffset, 0.5, [-1000, 1000]) : numField(f("startMargin"), "始端の余白", p.startMargin, 0.5, PATTERN_LIMITS.startMargin) + numField(f("endMargin"), "終端の余白", p.endMargin, 0.5, PATTERN_LIMITS.endMargin)}</div>
+<h5>角と端</h5><div class="fields">${line.source.from === null || line.source.from === line.source.to ? `<label>対称配置${sel(f("symmetry"), SYMMETRIES, p.symmetry ?? "auto")}</label>` : ""}<label>角の処理${sel(f("corner"), CORNER_MODES, p.corner)}</label>${numField(f("cornerAngle"), "角とみなす角度", p.cornerAngle, 5, PATTERN_LIMITS.cornerAngle, "°")}${line.source.from === null || line.source.from === line.source.to ? numField(f("startOffset"), "開始位置", p.startOffset, 0.5, [-1000, 1000]) : numField(f("startMargin"), "始端の余白", p.startMargin, 0.5, PATTERN_LIMITS.startMargin) + numField(f("endMargin"), "終端の余白", p.endMargin, 0.5, PATTERN_LIMITS.endMargin)}</div>
 <div class="leather-checks">${check(f("reverse"), "逆目打ち（進行方向を反転）", p.reverse)}${check(f("flip"), "ミラー（裏から加工・穴の傾きを反転）", p.flip)}</div>
 <div data-leather-stats="${line.id}">${statsHTML(st)}</div>
 ${line.skipped?.length ? `<p class="note warn">消した穴 ${line.skipped.length} 個（「穴を消す」ツールで薄い印をタップすると個別に戻せます） <button class="text-link" data-leather-action="restore-holes" data-part="${part.id}" data-entry="${line.id}">すべて戻す</button></p>` : ""}

@@ -17,6 +17,10 @@ export const HOLE_SHAPES = Object.freeze({
 export const SPACINGS = Object.freeze({ arc: "一定弧長ピッチ", chord: "一定弦長ピッチ" });
 export const FITS = Object.freeze({ fit: "自動フィット", fixed: "ピッチ固定（余りは末尾）", count: "穴数優先" });
 export const CORNER_MODES = Object.freeze({ auto: "自動", apex: "角に穴", straddle: "角をまたぐ対称配置", none: "角を無視" });
+// Symmetry of the hole layout on a closed line: the start is put where the
+// part's symmetry axis crosses the line (and the count kept even when the
+// part is symmetric about both axes), so holes come in mirror pairs.
+export const SYMMETRIES = Object.freeze({ auto: "自動（対称軸を検出）", vertical: "左右対称（縦軸）", horizontal: "上下対称（横軸）", none: "なし（成り行き）" });
 // Common pricking iron pitches (mm) offered as presets; SPI = 25.4 / pitch.
 export const PITCH_PRESETS = Object.freeze([2.7, 3.0, 3.38, 3.85, 4.0, 4.5, 5.0]);
 export const spiOf = (pitch) => 25.4 / pitch;
@@ -38,6 +42,8 @@ export const DEFAULT_PATTERN = Object.freeze({
   reverse: false,
   flip: false,
   maxDeviation: 0.12,
+  symmetry: "auto",
+  evenCount: false,
 });
 export const PATTERN_LIMITS = Object.freeze({
   pitch: [0.5, 50],
@@ -72,6 +78,8 @@ export function normalizePattern(p = {}) {
     reverse: Boolean(p.reverse),
     flip: Boolean(p.flip),
     maxDeviation: clamp(p.maxDeviation, PATTERN_LIMITS.maxDeviation, DEFAULT_PATTERN.maxDeviation),
+    symmetry: p.symmetry in SYMMETRIES ? p.symmetry : DEFAULT_PATTERN.symmetry,
+    evenCount: Boolean(p.evenCount),
   };
 }
 
@@ -247,6 +255,11 @@ export function placeHoles(points, patternIn, { closed = undefined } = {}) {
     const interior = Math.max(0, pattern.count - anchors.length);
     counts = spans.length === 1 && spans[0].loop ? [Math.max(1, pattern.count)] : allocate(lengths, interior + spans.length);
   } else counts = lengths.map((l) => Math.max(1, Math.round(l / p)));
+  // Double symmetry needs an even number of holes around a plain loop.
+  if (pattern.evenCount && spans.length === 1 && spans[0].loop && counts[0] % 2 === 1) {
+    const n = counts[0], len = lengths[0];
+    counts[0] = Math.abs(len / (n + 1) - p) <= Math.abs(len / (n - 1) - p) || n - 1 < 2 ? n + 1 : n - 1;
+  }
   // Positions.
   const holesS = []; // { s, anchor }
   spans.forEach((sp, i) => {
