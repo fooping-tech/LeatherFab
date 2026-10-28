@@ -130,6 +130,27 @@ export function syncMirrorParts(project, makeId) {
   }
   return updated;
 }
+// Joints implied by mirror links: every own stitch line of a source pairs
+// with the copy's line at the same position, whether or not an explicit
+// joint object exists (it may have been deleted). Explicit joints between
+// the same two lines take precedence.
+export function implicitMirrorJoints(leather) {
+  const out = [];
+  if (!leather) return out;
+  const explicit = new Set(leather.joints.flatMap((j) => [`${j.a.lineId}|${j.b.lineId}`, `${j.b.lineId}|${j.a.lineId}`]));
+  for (const copy of leather.parts) {
+    const src = copy.mirrorOf && leather.parts.find((p) => p.id === copy.mirrorOf.partId);
+    if (!src) continue;
+    const srcLines = src.stitchLines.filter((l) => l.source.kind !== "projected"),
+      copyLines = copy.stitchLines.filter((l) => l.source.kind !== "projected");
+    srcLines.forEach((line, k) => {
+      const partner = copyLines[k];
+      if (!partner || explicit.has(`${line.id}|${partner.id}`)) return;
+      out.push({ id: `mirror-${copy.id}-${k}`, name: `${src.name} × ミラー（自動）`, a: { partId: src.id, lineId: line.id }, b: { partId: copy.id, lineId: partner.id }, reverse: false, master: "a", implicit: true });
+    });
+  }
+  return out;
+}
 export function detachMirror(leather, partId) {
   const p = leather.parts.find((x) => x.id === partId);
   if (p?.mirrorOf) delete p.mirrorOf;

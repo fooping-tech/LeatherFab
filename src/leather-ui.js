@@ -5,7 +5,7 @@
 // edits project.leather.
 import { transform, worldContours, bounds } from "./geometry.js";
 import { mirrorItems, axisThrough } from "./cad.js";
-import { createMirrorPart, syncMirrorParts, detachMirror } from "./leather/mirror.js";
+import { createMirrorPart, syncMirrorParts, detachMirror, implicitMirrorJoints } from "./leather/mirror.js";
 import { baseFromItem, applyHistory, isStale, describeFeature, describeBase, FEATURE_LABELS, normalizeFeature } from "./leather/history.js";
 import { nearestNode } from "./cad.js";
 import { nearestSegment } from "./path.js";
@@ -54,7 +54,7 @@ export function createLeatherUI(ctx) {
     });
     for (const k of [...cache.keys()]) if (!seen.has(k)) cache.delete(k);
     resolveProjected(parts);
-    const joints = l.joints.map((j) => deriveJoint(j, parts, p));
+    const joints = [...l.joints, ...implicitMirrorJoints(l)].map((j) => deriveJoint(j, parts, p));
     for (const dj of joints) {
       if (dj.error) continue;
       if (dj.masterHoles && dj.masterHoles.length !== dj.master.holes.length) dj.master.holes = dj.masterHoles;

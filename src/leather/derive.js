@@ -12,6 +12,7 @@ import { placeHoles, holeContour } from "./stitch.js";
 import { curve, offsetInward, isClosedPolyline, nearestOnPolyline, totalLength, pointAt, slice, nearestArcLength, angleAt as tangentDeg } from "./polyline.js";
 import { presetById, hardwareContours } from "./hardware.js";
 import { MATERIALS } from "./model.js";
+import { implicitMirrorJoints } from "./mirror.js";
 
 const issue = (level, message, extra = {}) => ({ level, message, ...extra });
 // Applies a line's `skipped` list to placed holes: for each recorded
@@ -496,7 +497,7 @@ export function deriveProject(project) {
   const leather = project.leather;
   const parts = (leather?.parts ?? []).map((p) => derivePart(project, p));
   finishDerivation(project, parts);
-  const joints = (leather?.joints ?? []).map((j) => deriveJoint(j, parts, project));
+  const joints = [...(leather?.joints ?? []), ...implicitMirrorJoints(leather)].map((j) => deriveJoint(j, parts, project));
   for (const dj of joints) {
     if (dj.error) continue;
     if (dj.masterHoles && dj.masterHoles.length !== dj.master.holes.length) dj.master.holes = dj.masterHoles;
