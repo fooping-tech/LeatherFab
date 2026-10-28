@@ -208,3 +208,17 @@ test("user file: skips synced onto a linked copy are removed on sync, and only m
   const hs = d.parts[0].hardware.map((h) => h.center), hc = d.parts[1].hardware.map((h) => h.center);
   for (const h of hs) assert.ok(hc.some((g) => Math.abs(g.x - image(h).x) < 1e-3 && Math.abs(g.y - image(h).y) < 1e-3));
 });
+
+test("a linked mirror copy pairs with its source even when the explicit joint was deleted", () => {
+  const p = validateProject(JSON.parse(fs.readFileSync("tests/fixtures/mirror-skips.json", "utf8")));
+  p.leather.joints = [];
+  let n = 0;
+  syncAll(p, () => `m${++n}`);
+  const d = deriveProject(p);
+  assert.equal(d.joints.length, 1);
+  assert.ok(d.joints[0].joint.implicit && d.joints[0].mirrored);
+  const A = d.parts[0].stitch[0], B = d.parts[1].stitch[0];
+  assert.equal(A.allHoles.length - A.holes.length, 4);
+  assert.equal(B.holes.length, A.holes.length, "copy drops the images of the erased holes without an explicit joint");
+  assert.equal(B.pairedGhosts.length, 4);
+});
