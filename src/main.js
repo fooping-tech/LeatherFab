@@ -3573,8 +3573,8 @@ $("#new-project").onclick = () => {
   project = validateProject({
     version: 1,
     name: "無題の型紙",
-    width: 300,
-    height: 200,
+    width: 600,
+    height: 400,
     items: [],
   });
   selectItem(null);
@@ -5238,7 +5238,7 @@ async function init() {
     ];
     for (const id of used) loadFont(id).catch((e) => notify(e.message));
     if (!restored) {
-      project = validateProject({ version: 1, name: "AirTag ケース", width: 300, height: 200, items: [] });
+      project = validateProject({ version: 1, name: "AirTag ケース", width: 600, height: 400, items: [] });
       ensureLayers(project);
       const built = airtagCase(uid, project.layers[0].id, { x: 30, y: 40 });
       project.items.push(...built.items);
